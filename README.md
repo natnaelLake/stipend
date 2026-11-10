@@ -122,6 +122,12 @@ cargo test -p warden-integration
 
 → `test result: ok. 6 passed; 0 failed`
 
+**The first run takes about ten minutes and looks like it has hung — it has
+not.** Each test compiles the contract to wasm and boots a NEAR sandbox node,
+and on a cold checkout that work is not yet cached. A second run takes well
+under a minute. It also downloads a sandbox binary, so unlike the unit tests
+this one needs network.
+
 `near-workspaces` lives in its own crate precisely so that `cd contract &&
 cargo test` stays offline and fast.
 

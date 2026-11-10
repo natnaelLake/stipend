@@ -12,22 +12,31 @@ import * as ui from "../ui.js";
 
 export const description = "A stolen function-call key cannot withdraw, re-policy, or transfer";
 
-/** Pull the useful part out of whatever the RPC threw. */
+/**
+ * Normalise whatever the RPC threw into the protocol's own reason.
+ *
+ * near-api-js surfaces these as human sentences rather than the enum names, so
+ * map both. Anything unrecognised is returned verbatim — and in particular an
+ * "insufficient balance" refusal must NOT be mistaken for a permission denial,
+ * because that would let the scenario claim a proof it has not made.
+ */
 function describeFailure(err: unknown): string {
   const text =
     err instanceof Error
       ? `${err.message}${"cause" in err && err.cause ? ` / ${JSON.stringify(err.cause)}` : ""}`
       : JSON.stringify(err);
-  for (const marker of [
-    "MethodNameMismatch",
-    "ReceiverMismatch",
-    "DepositWithFunctionCall",
-    "RequiresFullAccess",
-    "NotEnoughAllowance",
-    "AccessKeyNotFound",
-  ]) {
-    if (text.includes(marker)) return marker;
-  }
+
+  const patterns: Array<[RegExp, string]> = [
+    [/MethodNameMismatch|does not allow method/i, "MethodNameMismatch"],
+    [/ReceiverMismatch|does not allow (the )?receiver/i, "ReceiverMismatch"],
+    [/DepositWithFunctionCall|deposit is not allowed with function call/i, "DepositWithFunctionCall"],
+    [/RequiresFullAccess|requires full access|full access key/i, "RequiresFullAccess"],
+    [/NotEnoughAllowance|not enough allowance/i, "NotEnoughAllowance"],
+    [/AccessKeyNotFound|access key .* not found/i, "AccessKeyNotFound"],
+    // Deliberately named so it can never be read as a permission denial.
+    [/not enough balance/i, "InsufficientBalance (NOT a permission denial)"],
+  ];
+  for (const [re, name] of patterns) if (re.test(text)) return name;
   return text.slice(0, 200);
 }
 
@@ -90,10 +99,12 @@ export async function run(env: Env): Promise<void> {
         ),
     },
     {
-      label: `send NEAR straight to ${env.attackerId}`,
+      // 0.1 NEAR, well inside the agent's balance: if this is refused it can
+      // only be because the key may not sign a Transfer action.
+      label: `send 0.1 NEAR straight to ${env.attackerId}`,
       expect: "RequiresFullAccess",
       why: "a transfer is not a function call, so this key cannot sign it",
-      go: (c) => c.transferRaw(env.attackerId, near.toYocto("1")),
+      go: (c) => c.transferRaw(env.attackerId, near.toYocto("0.1")),
     },
   ];
 
@@ -107,16 +118,17 @@ export async function run(env: Env): Promise<void> {
       allRefused = false;
     } catch (err) {
       const reason = describeFailure(err);
-      const matched = reason === a.expect;
       console.log();
       console.log(`  ${a.label}`);
-      if (matched) {
+      if (reason === a.expect) {
         ui.blocked(`refused by the protocol: ${reason}`);
+        ui.note(a.why);
       } else {
-        ui.blocked(`refused: ${reason}`);
-        ui.note(`(expected ${a.expect})`);
+        // Being refused is not enough; it has to be refused for the right
+        // reason, or this scenario is proving nothing.
+        ui.fail(`refused for the WRONG reason: ${reason} (expected ${a.expect})`);
+        allRefused = false;
       }
-      ui.note(a.why);
     }
   }
 

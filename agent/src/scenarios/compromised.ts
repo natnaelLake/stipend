@@ -82,9 +82,25 @@ export async function run(env: Env): Promise<void> {
   }
   ui.blocked("every drain attempt was rejected on chain, by the contract");
   ui.blocked(`the agent is now frozen and cannot pay anyone, not even ${env.merchantId}`);
-  ui.ok(
-    `vault balance unchanged: ${near.fmt(before.available)} → ${near.fmt(after.available)}`,
-  );
+
+  if (before.total !== after.total) {
+    ui.fail(
+      `vault balance moved: ${near.fmt(before.total)} → ${near.fmt(after.total)} — funds should not have left`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  ui.ok(`not one yoctoNEAR left the vault: still ${near.fmt(after.total)}`);
+
+  // Writing each rejection to the audit log costs storage, so the *spendable*
+  // figure dips slightly. Worth naming rather than glossing over, because the
+  // two numbers do differ on screen.
+  const storageDelta = BigInt(after.storage_reserve) - BigInt(before.storage_reserve);
+  if (storageDelta > 0n) {
+    ui.note(
+      `(spendable balance dipped ${near.fmt(storageDelta.toString())} — on-chain storage for the new audit entries, not a payout)`,
+    );
+  }
   ui.note("");
   ui.note("The agent's own code was never consulted. The policy is the contract's.");
 }

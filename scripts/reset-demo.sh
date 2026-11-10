@@ -23,8 +23,7 @@ owner_call() {
     json-args "$2" \
     prepaid-gas '100.0 Tgas' attached-deposit '1 yoctoNEAR' \
     sign-as "$OWNER_ACCOUNT_ID" \
-    network-config testnet sign-with-plaintext-private-key \
-    --signer-public-key "$OWNER_PUBLIC_KEY" --signer-private-key "$OWNER_PRIVATE_KEY" send
+    network-config testnet sign-with-plaintext-private-key "$OWNER_PRIVATE_KEY" send
 }
 
 view() {

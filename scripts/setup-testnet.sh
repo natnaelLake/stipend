@@ -28,8 +28,13 @@ skip()  { printf '\033[2m·\033[0m %s\n' "$*"; }
 die()   { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 # Print every command, then run it unless this is a dry run.
+# Arguments are quoted on the way out so the printed line can be pasted as-is.
 run() {
-  printf '\033[2m  $ %s\033[0m\n' "$*"
+  local shown=() a
+  for a in "$@"; do
+    if [[ "$a" =~ [[:space:]\"{}] ]]; then shown+=("'$a'"); else shown+=("$a"); fi
+  done
+  printf '\033[2m  $ %s\033[0m\n' "${shown[*]}"
   if [[ $DRY_RUN -eq 0 ]]; then "$@"; fi
 }
 
@@ -75,8 +80,9 @@ fi
 set -a; . "$REPO_ROOT/.env"; set +a
 ok "root account: $WARDEN_ROOT"
 
-SIGN_AS_OWNER=(network-config testnet sign-with-plaintext-private-key
-  --signer-public-key "$OWNER_PUBLIC_KEY" --signer-private-key "$OWNER_PRIVATE_KEY" send)
+# near-cli-rs 0.31 takes the signer's private key positionally and derives the
+# public key from it.
+SIGN_AS_OWNER=(network-config testnet sign-with-plaintext-private-key "$OWNER_PRIVATE_KEY" send)
 
 # 2. Build the contract
 if [[ ! -f "$WASM" ]]; then
@@ -110,8 +116,11 @@ create_sub() {
     "${SIGN_AS_OWNER[@]}"
 }
 
-create_sub "$VAULT_CONTRACT_ID"   "8 NEAR"   "$VAULT_PUBLIC_KEY"    "vault"
-create_sub "$AGENT_ACCOUNT_ID"    "2 NEAR"   "$AGENT_PUBLIC_KEY"    "agent"
+# The testnet faucet sponsors the root account with ~10 NEAR, and everything
+# below comes out of that, so these are deliberately tight. Top the vault up
+# later with ./scripts/fund-vault.sh.
+create_sub "$VAULT_CONTRACT_ID"   "7 NEAR"   "$VAULT_PUBLIC_KEY"    "vault"
+create_sub "$AGENT_ACCOUNT_ID"    "0.6 NEAR" "$AGENT_PUBLIC_KEY"    "agent"
 create_sub "$MERCHANT_ACCOUNT_ID" "0.1 NEAR" "$MERCHANT_PUBLIC_KEY" "merchant"
 create_sub "$ATTACKER_ACCOUNT_ID" "0.1 NEAR" "$ATTACKER_PUBLIC_KEY" "attacker"
 create_sub "$STRANGER_ACCOUNT_ID" "0.1 NEAR" "$STRANGER_PUBLIC_KEY" "unknown supplier"
@@ -138,14 +147,11 @@ else
     use-file "$WASM" \
     with-init-call new json-args "$INIT_ARGS" \
     prepaid-gas '100.0 Tgas' attached-deposit '0 NEAR' \
-    network-config testnet sign-with-plaintext-private-key \
-    --signer-public-key "$VAULT_PUBLIC_KEY" --signer-private-key "$VAULT_PRIVATE_KEY" send
+    network-config testnet sign-with-plaintext-private-key "$VAULT_PRIVATE_KEY" send
 fi
 
-# 6. Fund the vault so it has something to protect
-info "funding the vault with 20 NEAR"
-run near tokens "$WARDEN_ROOT" send-near "$VAULT_CONTRACT_ID" '20 NEAR' \
-  "${SIGN_AS_OWNER[@]}"
+# 6. The vault was funded at creation. Anything more has to come from another
+#    faucet-sponsored account, which is what fund-vault.sh does.
 
 # 7. The whole point: give the agent a key that can ONLY call request_payment
 info "adding the agent's function-call access key (request_payment only)"
@@ -155,8 +161,7 @@ run near account add-key "$AGENT_ACCOUNT_ID" \
   --contract-account-id "$VAULT_CONTRACT_ID" \
   --function-names 'request_payment' \
   use-manually-provided-public-key "$AGENT_FC_PUBLIC_KEY" \
-  network-config testnet sign-with-plaintext-private-key \
-  --signer-public-key "$AGENT_PUBLIC_KEY" --signer-private-key "$AGENT_PRIVATE_KEY" send
+  network-config testnet sign-with-plaintext-private-key "$AGENT_PRIVATE_KEY" send
 
 # 8. Seed the policy: register the agent, allowlist the merchant, blocklist the attacker
 owner_call() {

@@ -72,7 +72,9 @@ export interface PaymentDecision {
   agent_frozen: boolean;
 }
 
+/** What `get_dashboard` returns: the whole vault in one consistent snapshot. */
 export interface VaultSnapshot {
+  as_of_ms: string;
   owner: string;
   paused: boolean;
   policy: Policy;

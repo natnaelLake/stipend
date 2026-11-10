@@ -3,31 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { POLL_MS } from "./config";
 import { view } from "./rpc";
-import type {
-  AgentView,
-  BalanceView,
-  LogEntry,
-  PendingPayment,
-  Policy,
-  VaultSnapshot,
-} from "./types";
+import type { VaultSnapshot } from "./types";
 
 const LOG_LIMIT = 40;
 
-async function readAll(signal: AbortSignal): Promise<VaultSnapshot> {
-  const [owner, paused, policy, agents, pending, log, balance, allowlist, blocklist] =
-    await Promise.all([
-      view<string>("get_owner", {}, signal),
-      view<boolean>("is_paused", {}, signal),
-      view<Policy>("get_policy", {}, signal),
-      view<AgentView[]>("get_agents", {}, signal),
-      view<PendingPayment[]>("get_pending", {}, signal),
-      view<LogEntry[]>("get_recent_log", { limit: LOG_LIMIT }, signal),
-      view<BalanceView>("get_balance", {}, signal),
-      view<string[]>("get_allowlist", {}, signal),
-      view<string[]>("get_blocklist", {}, signal),
-    ]);
-  return { owner, paused, policy, agents, pending, log, balance, allowlist, blocklist };
+/**
+ * One `get_dashboard` call rather than nine separate views: nine would be nine
+ * round trips against a public RPC's rate limit every poll, and could straddle
+ * blocks — showing a balance from one block beside a log from another.
+ */
+function readAll(signal: AbortSignal): Promise<VaultSnapshot> {
+  return view<VaultSnapshot>("get_dashboard", { log_limit: LOG_LIMIT }, signal);
 }
 
 export interface VaultState {

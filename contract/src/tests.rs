@@ -711,3 +711,26 @@ fn owner_can_edit_the_lists_and_the_policy_takes_effect() {
         Decision::Rejected
     );
 }
+
+#[test]
+fn dashboard_view_matches_the_individual_views() {
+    let mut v = setup();
+    as_agent(T0);
+    v.request_payment(merchant(), milli(10), "one".to_string());
+    as_agent(T0 + 1);
+    v.request_payment(merchant(), milli(1500), "needs approval".to_string());
+
+    let d = v.get_dashboard(10);
+
+    // The aggregate must not drift from what it aggregates.
+    assert_eq!(d.owner, v.get_owner());
+    assert_eq!(d.paused, v.is_paused());
+    assert_eq!(d.policy, v.get_policy());
+    assert_eq!(d.pending.len(), v.get_pending().len());
+    assert_eq!(d.log.len(), v.get_recent_log(10).len());
+    assert_eq!(d.allowlist, v.get_allowlist());
+    assert_eq!(d.blocklist, v.get_blocklist());
+    assert_eq!(d.agents.len(), v.get_agents().len());
+    assert_eq!(d.balance.available, v.get_balance().available);
+    assert_eq!(d.as_of_ms, U64(T0 + 1));
+}

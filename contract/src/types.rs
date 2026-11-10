@@ -205,3 +205,25 @@ pub struct BalanceView {
     /// What payments may actually draw on.
     pub available: NearToken,
 }
+
+/// Everything the dashboard needs, in a single view call.
+///
+/// Reading these nine pieces separately costs nine round trips against a
+/// public RPC's rate limit, and the answers can straddle blocks — so a
+/// dashboard could show a balance from one block beside a log from another.
+/// This is one request and one consistent snapshot.
+#[near(serializers = [json])]
+#[derive(Clone, Debug)]
+pub struct DashboardView {
+    pub owner: AccountId,
+    pub paused: bool,
+    pub policy: Policy,
+    pub agents: Vec<AgentView>,
+    pub pending: Vec<PendingPayment>,
+    pub log: Vec<LogEntry>,
+    pub balance: BalanceView,
+    pub allowlist: Vec<AccountId>,
+    pub blocklist: Vec<AccountId>,
+    /// Block timestamp of this snapshot.
+    pub as_of_ms: U64,
+}

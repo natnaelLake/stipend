@@ -26,7 +26,8 @@ pub mod types;
 
 use policy::{evaluate, roll_windows, Context, Eval};
 use types::{
-    AgentState, AgentView, BalanceView, Decision, LogEntry, PaymentDecision, PendingPayment, Policy,
+    AgentState, AgentView, BalanceView, DashboardView, Decision, LogEntry, PaymentDecision,
+    PendingPayment, Policy,
 };
 
 /// Longest accepted memo, in bytes.
@@ -585,6 +586,25 @@ impl Vault {
             .rev()
             .filter_map(|i| self.log.get(&i).cloned())
             .collect()
+    }
+
+    /// One-shot read of the whole vault, for dashboards.
+    ///
+    /// Prefer this over nine separate view calls: it is one RPC round trip and
+    /// one consistent block snapshot.
+    pub fn get_dashboard(&self, log_limit: u32) -> DashboardView {
+        DashboardView {
+            owner: self.owner.clone(),
+            paused: self.paused,
+            policy: self.policy.clone(),
+            agents: self.get_agents(),
+            pending: self.get_pending(),
+            log: self.get_recent_log(log_limit),
+            balance: self.get_balance(),
+            allowlist: self.get_allowlist(),
+            blocklist: self.get_blocklist(),
+            as_of_ms: U64(env::block_timestamp_ms()),
+        }
     }
 
     pub fn get_balance(&self) -> BalanceView {

@@ -3,6 +3,7 @@
 import "@near-wallet-selector/modal-ui/styles.css";
 
 import { CONFIG, EXPLORER_ACCOUNT } from "@/lib/config";
+import { activeRpc } from "@/lib/rpc";
 import { nearLabel, shortAccount } from "@/lib/format";
 import { useVault } from "@/lib/useVault";
 import { useWallet } from "@/lib/useWallet";
@@ -37,8 +38,9 @@ export default function Dashboard() {
             {error}
           </p>
           <p className="mt-2 text-sm" style={{ color: "var(--text-muted)" }}>
-            Contract <span className="mono">{CONFIG.contractId}</span> via{" "}
-            <span className="mono">{CONFIG.rpcUrl}</span>
+            Contract <span className="mono">{CONFIG.contractId}</span>. Tried{" "}
+            {CONFIG.rpcUrls.length} RPC endpoint{CONFIG.rpcUrls.length === 1 ? "" : "s"}, last{" "}
+            <span className="mono">{activeRpc()}</span>.
           </p>
         </div>
       </main>

@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+/*
+ * Status colours are the reserved four and are mode-invariant. On the light
+ * surface, warning (1.79) and serious (2.57) sit below 3:1 by design — every
+ * status is therefore always rendered as an icon + label chip, never as colour
+ * alone, and chip ink is chosen per chip for >= 4.5:1.
+ */
+:root {
+  color-scheme: light;
+
+  --surface-0: #f5f5f3;
+  --surface-1: #fcfcfb;
+  --surface-2: #ecebe7;
+  --border: #e3e2dd;
+
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #86857f;
+
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --neutral-chip: #e7e6e1;
+  --neutral-chip-ink: #0b0b0b;
+
+  --meter-track: #e3e2dd;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #232321;
+    --border: #2e2e2b;
+
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8c8b83;
+
+    --neutral-chip: #3a3a38;
+    --neutral-chip-ink: #ffffff;
+
+    --meter-track: #2e2e2b;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --surface-0: #121211;
+  --surface-1: #1a1a19;
+  --surface-2: #232321;
+  --border: #2e2e2b;
+
+  --text-primary: #f0efec;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8c8b83;
+
+  --neutral-chip: #3a3a38;
+  --neutral-chip-ink: #ffffff;
+
+  --meter-track: #2e2e2b;
+}
+
+html,
+body {
+  background: var(--surface-0);
+  color: var(--text-primary);
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "tnum" 1;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* 4px rounded data-end anchored to the baseline, on a recessive track. */
+.meter {
+  background: var(--meter-track);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+}
+
+.focusable:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pulse-dot {
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+}

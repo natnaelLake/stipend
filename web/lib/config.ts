@@ -4,14 +4,12 @@
  * configuration.
  */
 const DEFAULT_RPCS: Record<string, string[]> = {
-  // FastNEAR's free tier rate-limits a polling dashboard quickly, so it is a
-  // fallback rather than the default.
-  testnet: [
-    "https://rpc.testnet.near.org",
-    "https://near-testnet.drpc.org",
-    "https://test.rpc.fastnear.com",
-  ],
-  mainnet: ["https://rpc.mainnet.near.org", "https://free.rpc.fastnear.com"],
+  // rpc.testnet.near.org is deprecated and now answers -429 with a notice to
+  // move off it, so it is deliberately absent. Both of these were burst-tested
+  // for rate limits and for a real Access-Control-Allow-Origin header, since a
+  // server-side curl proves nothing about what a browser is allowed to do.
+  testnet: ["https://near-testnet.drpc.org", "https://test.rpc.fastnear.com"],
+  mainnet: ["https://free.rpc.fastnear.com", "https://near.drpc.org"],
 };
 
 const NETWORK = (process.env.NEXT_PUBLIC_NEAR_NETWORK ?? "testnet") as "testnet" | "mainnet";

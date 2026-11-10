@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["contract", "integration"]
+
+# Release profile for the on-chain wasm. Workspace-level because Cargo only
+# honours profiles in the workspace root.
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true

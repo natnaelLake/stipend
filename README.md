@@ -17,10 +17,10 @@ Built at **NEAR HACKATHON**. Tracks: `security` (primary), `agents`.
 | | |
 |---|---|
 | **Contract (testnet)** | [`vault.warden-demo.testnet`](https://testnet.nearblocks.io/address/vault.warden-demo.testnet) |
-| **Live dashboard** | _not yet deployed — see [Run the dashboard](#run-the-dashboard) to run it locally_ |
+| **Live dashboard** | **https://warden-ten-drab.vercel.app** — read-only, no wallet needed |
 | **Demo video** | _not yet recorded_ |
 
-> The two blanks above must be filled before submission.
+> The video link must be filled in before submission.
 
 ---
 
@@ -250,6 +250,9 @@ cd web && npm install && npm run dev
 Open http://localhost:3000. It defaults to the deployed demo vault, so it shows
 live data with no configuration; point it at your own with
 `NEXT_PUBLIC_VAULT_CONTRACT_ID` in `web/.env.local`.
+
+The same build is hosted at **https://warden-ten-drab.vercel.app** if you would
+rather just look at it.
 
 Everything is readable **without a wallet**. Connecting the owner wallet
 additionally enables approve/reject, pause, freeze/unfreeze, policy editing and

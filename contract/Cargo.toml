@@ -1,5 +1,5 @@
 [package]
-name = "warden-vault"
+name = "stipend-vault"
 description = "Policy-enforced spending vault for AI agents on NEAR"
 version = "0.1.0"
 edition = "2021"

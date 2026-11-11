@@ -1,7 +1,7 @@
-# Warden — a spending vault for AI agents on NEAR
+# Stipend — a spending vault for AI agents on NEAR
 
 AI agents are starting to hold money, and a single prompt injection can drain a
-wallet. Warden puts the money in a NEAR contract instead of in the agent. The
+wallet. Stipend puts the money in a NEAR contract instead of in the agent. The
 agent holds only a **function-call access key** that can call one method,
 `request_payment`, and the contract checks every request against rules the
 owner set. Approved payments execute, large ones wait for a human, and
@@ -17,10 +17,31 @@ Built at **NEAR HACKATHON**. Tracks: `security` (primary), `agents`.
 | | |
 |---|---|
 | **Contract (testnet)** | [`vault.warden-demo.testnet`](https://testnet.nearblocks.io/address/vault.warden-demo.testnet) |
-| **Live dashboard** | **https://warden-ten-drab.vercel.app** — read-only, no wallet needed |
+| **Live dashboard** | **https://stipend-psi.vercel.app** — read-only, no wallet needed |
 | **Demo video** | _not yet recorded_ |
 
 > The video link must be filled in before submission.
+
+### About the demo deployment
+
+Two things to be straight about.
+
+**The accounts carry a `warden-demo.testnet` prefix.** The project was renamed
+to Stipend after the contract was deployed; the prefix is only an identifier
+and the contract, policy and audit log are exactly the ones described here.
+
+**That deployment is now read-only.** Its signing keys were lost during the
+rename, so no new payments or owner actions can be made against it. Everything
+you can *read* still works and is real: the quick-verify call below, the live
+dashboard, and an audit log holding 19 genuine entries including eight blocked
+attacks and two auto-freezes.
+
+To see payments actually execute, deploy your own with
+[`./scripts/setup-testnet.sh`](#deploy-your-own-vault-on-testnet) and run the
+scenarios against it — that path is unaffected. Note that NEAR's testnet faucet
+(`helper.nearprotocol.com`) is refusing connections at the time of writing,
+which blocks creating the root account; the rest of the script works once it
+is back.
 
 ---
 
@@ -117,7 +138,7 @@ Integration tests run a real NEAR node in a sandbox (downloads a sandbox binary
 on first run, so this one does need network):
 
 ```bash
-cargo test -p warden-integration
+cargo test -p stipend-integration
 ```
 
 → `test result: ok. 6 passed; 0 failed`
@@ -133,7 +154,7 @@ cargo test` stays offline and fast.
 
 ### The function-call key proof
 
-`cargo test -p warden-integration function_call_key -- --nocapture` adds a
+`cargo test -p stipend-integration function_call_key -- --nocapture` adds a
 function-call key restricted to `request_payment`, confirms it can do its job,
 then tries to abuse it. Each refusal asserts the *specific*
 `InvalidAccessKeyError`, because a test that accepts any error would also pass
@@ -169,7 +190,7 @@ environment.
 ### Deploy your own vault on testnet
 
 This creates **your own** accounts under a generated name like
-`warden-demo-a1b2c3.testnet`, so it does not collide with the demo above.
+`stipend-demo-a1b2c3.testnet`, so it does not collide with the demo above.
 
 ```bash
 cd agent && npm install && npm run gen-keys && cd ..
@@ -251,7 +272,7 @@ Open http://localhost:3000. It defaults to the deployed demo vault, so it shows
 live data with no configuration; point it at your own with
 `NEXT_PUBLIC_VAULT_CONTRACT_ID` in `web/.env.local`.
 
-The same build is hosted at **https://warden-ten-drab.vercel.app** if you would
+The same build is hosted at **https://stipend-psi.vercel.app** if you would
 rather just look at it.
 
 Everything is readable **without a wallet**. Connecting the owner wallet
@@ -345,10 +366,10 @@ Honest list.
 - **Testnet only.** Nothing here has been deployed to mainnet or audited.
 - **The function-call key is restricted, not harmless.** It can still call
   `request_payment` as often as the rate limit allows, and spend up to the
-  policy's limits on allowlisted recipients. Warden bounds the blast radius of
+  policy's limits on allowlisted recipients. Stipend bounds the blast radius of
   a compromised agent; it does not make one safe.
 - **The owner's full-access key is the real root of trust.** If it leaks, the
-  attacker can rewrite the policy and withdraw. Warden does not help there —
+  attacker can rewrite the policy and withdraw. Stipend does not help there —
   use a hardware wallet or a multisig for the owner account.
 - **The audit log is a bounded ring buffer** (2,000 entries). Older entries are
   dropped on chain. Anything needing permanent history should index the

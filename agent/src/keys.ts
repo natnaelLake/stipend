@@ -39,7 +39,7 @@ function main(): void {
     process.exit(1);
   }
 
-  const root = rootArg ?? `warden-demo-${randomBytes(3).toString("hex")}.testnet`;
+  const root = rootArg ?? `stipend-demo-${randomBytes(3).toString("hex")}.testnet`;
   if (!root.endsWith(".testnet")) {
     console.error(`Root account must end in .testnet, got: ${root}`);
     process.exit(1);
@@ -60,7 +60,7 @@ function main(): void {
     "NEAR_NETWORK=testnet",
     "",
     "# --- accounts -----------------------------------------------------------",
-    `WARDEN_ROOT=${root}`,
+    `STIPEND_ROOT=${root}`,
     `OWNER_ACCOUNT_ID=${root}`,
     `VAULT_CONTRACT_ID=vault.${root}`,
     `AGENT_ACCOUNT_ID=agent1.${root}`,

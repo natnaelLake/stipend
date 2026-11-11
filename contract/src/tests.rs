@@ -134,7 +134,7 @@ fn approval_emits_a_nep297_event() {
     assert!(
         logs.iter().any(|l| l.starts_with("EVENT_JSON:")
             && l.contains("\"event\":\"payment_approved\"")
-            && l.contains("\"standard\":\"warden\"")),
+            && l.contains("\"standard\":\"stipend\"")),
         "expected a payment_approved event, got: {logs:?}"
     );
 }

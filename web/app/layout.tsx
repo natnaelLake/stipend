@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Warden — agent spending vault",
+  title: "Stipend — agent spending vault",
   description:
     "A policy-enforced spending vault for AI agents on NEAR. Live policy, approval queue and audit log.",
 };
@@ -13,7 +13,7 @@ export const metadata: Metadata = {
  */
 const THEME_BOOTSTRAP = `
 try {
-  var t = localStorage.getItem('warden-theme');
+  var t = localStorage.getItem('stipend-theme');
   if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
 } catch (e) {}
 `;

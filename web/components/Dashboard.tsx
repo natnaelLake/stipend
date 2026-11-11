@@ -56,7 +56,7 @@ export default function Dashboard() {
     <main className="mx-auto max-w-6xl px-5 py-8">
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Warden</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Stipend</h1>
           <p className="mt-0.5 text-sm" style={{ color: "var(--text-secondary)" }}>
             Policy-enforced spending vault for AI agents
           </p>

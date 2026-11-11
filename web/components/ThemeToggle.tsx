@@ -8,7 +8,7 @@ export default function ThemeToggle() {
   const [theme, setTheme] = useState<Theme | null>(null);
 
   useEffect(() => {
-    const stored = localStorage.getItem("warden-theme");
+    const stored = localStorage.getItem("stipend-theme");
     if (stored === "light" || stored === "dark") setTheme(stored);
     else setTheme(window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   }, []);
@@ -18,7 +18,7 @@ export default function ThemeToggle() {
     setTheme(next);
     document.documentElement.setAttribute("data-theme", next);
     try {
-      localStorage.setItem("warden-theme", next);
+      localStorage.setItem("stipend-theme", next);
     } catch {
       /* private mode */
     }

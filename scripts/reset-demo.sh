@@ -31,7 +31,7 @@ view() {
     -d "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"query\",\"params\":{\"request_type\":\"call_function\",\"finality\":\"final\",\"account_id\":\"$VAULT_CONTRACT_ID\",\"method_name\":\"$1\",\"args_base64\":\"$(printf '%s' "$2" | base64)\"}}"
 }
 
-echo "Resetting the Warden demo on $VAULT_CONTRACT_ID"
+echo "Resetting the Stipend demo on $VAULT_CONTRACT_ID"
 echo
 
 echo "→ unpausing the vault"

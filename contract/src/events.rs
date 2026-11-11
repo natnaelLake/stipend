@@ -3,7 +3,7 @@ use near_sdk::{env, AccountId, NearToken};
 
 use crate::types::{Decision, LogEntry};
 
-pub const EVENT_STANDARD: &str = "warden";
+pub const EVENT_STANDARD: &str = "stipend";
 pub const EVENT_VERSION: &str = "1.0.0";
 
 /// Emit a NEP-297 style structured log line.

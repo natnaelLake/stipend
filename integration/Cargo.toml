@@ -1,6 +1,6 @@
 [package]
-name = "warden-integration"
-description = "Sandbox integration tests for the Warden vault contract"
+name = "stipend-integration"
+description = "Sandbox integration tests for the Stipend vault contract"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"

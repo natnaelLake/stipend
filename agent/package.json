@@ -1,9 +1,9 @@
 {
-  "name": "warden-agent",
+  "name": "stipend-agent",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "AI agent runner that spends through the Warden vault",
+  "description": "AI agent runner that spends through the Stipend vault",
   "scripts": {
     "scenario": "tsx src/index.ts",
     "gen-keys": "tsx src/keys.ts",

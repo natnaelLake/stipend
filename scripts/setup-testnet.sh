@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Create the whole Warden demo on NEAR testnet from nothing:
+# Create the whole Stipend demo on NEAR testnet from nothing:
 #   accounts -> contract deploy -> funding -> the agent's restricted key -> policy seed
 #
 # Safe to re-run: every step checks whether it has already been done.
@@ -19,7 +19,7 @@ DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
 
 RPC="${NEAR_RPC_URL:-https://test.rpc.fastnear.com}"
-WASM="$REPO_ROOT/target/near/warden_vault/warden_vault.wasm"
+WASM="$REPO_ROOT/target/near/stipend_vault/stipend_vault.wasm"
 
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
 info()  { printf '\033[36m→\033[0m %s\n' "$*"; }
@@ -58,7 +58,7 @@ contract_deployed() {
 }
 
 # ---------------------------------------------------------------------------
-bold "Warden testnet setup"
+bold "Stipend testnet setup"
 echo
 
 # 0. Prerequisites
@@ -71,14 +71,14 @@ ok "toolchain present"
 # 1. Keys and account names
 if [[ ! -f "$REPO_ROOT/.env" ]]; then
   info "generating keys and account names"
-  run bash -c "cd '$REPO_ROOT/agent' && npm install --silent && npm run -s gen-keys ${WARDEN_ROOT:+-- $WARDEN_ROOT}"
+  run bash -c "cd '$REPO_ROOT/agent' && npm install --silent && npm run -s gen-keys ${STIPEND_ROOT:+-- $STIPEND_ROOT}"
 else
   skip ".env already exists — reusing the accounts and keys in it"
 fi
 [[ $DRY_RUN -eq 1 && ! -f "$REPO_ROOT/.env" ]] && die "dry run needs an existing .env to show real account names; run 'cd agent && npm run gen-keys' first"
 
 set -a; . "$REPO_ROOT/.env"; set +a
-ok "root account: $WARDEN_ROOT"
+ok "root account: $STIPEND_ROOT"
 
 # near-cli-rs 0.31 takes the signer's private key positionally and derives the
 # public key from it.
@@ -89,15 +89,15 @@ if [[ ! -f "$WASM" ]]; then
   info "building the contract"
   run bash -c "cd '$REPO_ROOT/contract' && cargo near build non-reproducible-wasm"
 else
-  skip "wasm already built at target/near/warden_vault/warden_vault.wasm"
+  skip "wasm already built at target/near/stipend_vault/stipend_vault.wasm"
 fi
 
 # 3. Root account, sponsored by the testnet faucet
-if account_exists "$WARDEN_ROOT"; then
-  skip "root account $WARDEN_ROOT already exists"
+if account_exists "$STIPEND_ROOT"; then
+  skip "root account $STIPEND_ROOT already exists"
 else
   info "creating root account via the testnet faucet"
-  run near account create-account sponsor-by-faucet-service "$WARDEN_ROOT" \
+  run near account create-account sponsor-by-faucet-service "$STIPEND_ROOT" \
     use-manually-provided-public-key "$OWNER_PUBLIC_KEY" \
     network-config testnet create
 fi
@@ -112,7 +112,7 @@ create_sub() {
   info "creating $label $id with $amount"
   run near account create-account fund-myself "$id" "$amount" \
     use-manually-provided-public-key "$pubkey" \
-    sign-as "$WARDEN_ROOT" \
+    sign-as "$STIPEND_ROOT" \
     "${SIGN_AS_OWNER[@]}"
 }
 

@@ -1,4 +1,4 @@
-//! # Warden vault
+//! # Stipend vault
 //!
 //! A policy-enforced spending vault for AI agents on NEAR.
 //!

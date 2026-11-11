@@ -33,7 +33,7 @@ async function once<T>(
     signal,
     body: JSON.stringify({
       jsonrpc: "2.0",
-      id: "warden",
+      id: "stipend",
       method: "query",
       params: {
         request_type: "call_function",

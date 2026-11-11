@@ -16,7 +16,7 @@ const NETWORK = (process.env.NEXT_PUBLIC_NEAR_NETWORK ?? "testnet") as "testnet"
 
 export const CONFIG = {
   contractId:
-    process.env.NEXT_PUBLIC_VAULT_CONTRACT_ID ?? "vault.warden-demo.testnet",
+    process.env.NEXT_PUBLIC_VAULT_CONTRACT_ID ?? "vault.stipend-demo.testnet",
   network: NETWORK,
   /** Tried in order; the first that answers is reused until it fails. */
   rpcUrls: process.env.NEXT_PUBLIC_NEAR_RPC_URL

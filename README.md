@@ -16,32 +16,11 @@ Built at **NEAR HACKATHON**. Tracks: `security` (primary), `agents`.
 
 | | |
 |---|---|
-| **Contract (testnet)** | [`vault.warden-demo.testnet`](https://testnet.nearblocks.io/address/vault.warden-demo.testnet) |
+| **Contract (testnet)** | [`vault.stipend-demo.testnet`](https://testnet.nearblocks.io/address/vault.stipend-demo.testnet) |
 | **Live dashboard** | **https://stipend-psi.vercel.app** — read-only, no wallet needed |
 | **Demo video** | _not yet recorded_ |
 
 > The video link must be filled in before submission.
-
-### About the demo deployment
-
-Two things to be straight about.
-
-**The accounts carry a `warden-demo.testnet` prefix.** The project was renamed
-to Stipend after the contract was deployed; the prefix is only an identifier
-and the contract, policy and audit log are exactly the ones described here.
-
-**That deployment is now read-only.** Its signing keys were lost during the
-rename, so no new payments or owner actions can be made against it. Everything
-you can *read* still works and is real: the quick-verify call below, the live
-dashboard, and an audit log holding 19 genuine entries including eight blocked
-attacks and two auto-freezes.
-
-To see payments actually execute, deploy your own with
-[`./scripts/setup-testnet.sh`](#deploy-your-own-vault-on-testnet) and run the
-scenarios against it — that path is unaffected. Note that NEAR's testnet faucet
-(`helper.nearprotocol.com`) is refusing connections at the time of writing,
-which blocks creating the root account; the rest of the script works once it
-is back.
 
 ---
 
@@ -71,7 +50,7 @@ contract decides.
    attach a deposit or carry a transfer. The agent's key is *physically unable*
    to move funds directly — this is enforced by the chain before a transaction
    is even accepted, so no contract code has to be correct for it to hold.
-2. **Named accounts make agent identities readable.** `agent1.warden-demo.testnet`
+2. **Named accounts make agent identities readable.** `agent1.stipend-demo.testnet`
    is legible in an audit log in a way an ethereum-style address is not.
 3. **The policy lives in the contract, not in the agent.** A prompt-injected or
    fully compromised agent runs into the same rules as a healthy one.
@@ -88,30 +67,30 @@ blocklisted account.** This is a read-only call against testnet; it needs no
 account, no key and no wallet.
 
 ```bash
-curl -s -X POST https://near-testnet.drpc.org -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":"1","method":"query","params":{"request_type":"call_function","finality":"final","account_id":"vault.warden-demo.testnet","method_name":"simulate_payment","args_base64":"eyJhZ2VudCI6ImFnZW50MS53YXJkZW4tZGVtby50ZXN0bmV0IiwicmVjaXBpZW50IjoiYXR0YWNrZXIud2FyZGVuLWRlbW8udGVzdG5ldCIsImFtb3VudCI6IjUwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIn0="}}' | python3 -c "import sys,json;print(bytes(json.load(sys.stdin)['result']['result']).decode())"
+curl -s -X POST https://near-testnet.drpc.org -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":"1","method":"query","params":{"request_type":"call_function","finality":"final","account_id":"vault.stipend-demo.testnet","method_name":"simulate_payment","args_base64":"eyJhZ2VudCI6ImFnZW50MS5zdGlwZW5kLWRlbW8udGVzdG5ldCIsInJlY2lwaWVudCI6ImF0dGFja2VyLnN0aXBlbmQtZGVtby50ZXN0bmV0IiwiYW1vdW50IjoiNTAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAifQ=="}}' | python3 -c "import sys,json;print(bytes(json.load(sys.stdin)['result']['result']).decode())"
 ```
 
 You will see:
 
 ```json
-{"decision":"rejected","reason":"recipient attacker.warden-demo.testnet is blocklisted","pending_id":null,"log_id":null,"agent_frozen":false}
+{"decision":"rejected","reason":"recipient attacker.stipend-demo.testnet is blocklisted","pending_id":null,"log_id":null,"agent_frozen":false}
 ```
 
 The `args_base64` above decodes to
-`{"agent":"agent1.warden-demo.testnet","recipient":"attacker.warden-demo.testnet","amount":"50000000000000000000000000"}`.
+`{"agent":"agent1.stipend-demo.testnet","recipient":"attacker.stipend-demo.testnet","amount":"50000000000000000000000000"}`.
 `python3` is only there to turn the RPC's byte array into text — drop the pipe
 and you get the same answer as a JSON array of bytes.
 
 **Same thing with the NEAR CLI**, if you have it:
 
 ```bash
-near contract call-function as-read-only vault.warden-demo.testnet simulate_payment json-args '{"agent":"agent1.warden-demo.testnet","recipient":"attacker.warden-demo.testnet","amount":"50000000000000000000000000"}' network-config testnet now
+near contract call-function as-read-only vault.stipend-demo.testnet simulate_payment json-args '{"agent":"agent1.stipend-demo.testnet","recipient":"attacker.stipend-demo.testnet","amount":"50000000000000000000000000"}' network-config testnet now
 ```
 
 **Read the whole vault — policy, agents, approval queue and audit log — in one call:**
 
 ```bash
-near contract call-function as-read-only vault.warden-demo.testnet get_dashboard json-args '{"log_limit":10}' network-config testnet now
+near contract call-function as-read-only vault.stipend-demo.testnet get_dashboard json-args '{"log_limit":10}' network-config testnet now
 ```
 
 The log will contain real blocked attacks: `exceeds max_per_tx`,
@@ -218,28 +197,31 @@ vault. Expected output (abridged):
 ▸ Drain attempts
 
   1. Take everything at once
-    → 15 NEAR to merchant.warden-demo.testnet
+    → 15 NEAR to merchant.stipend-demo.testnet
      REJECTED   exceeds max_per_tx (requested 15.00 NEAR, cap 2.00 NEAR)
 
   2. Send it somewhere the owner blocked
-    → 0.1 NEAR to attacker.warden-demo.testnet
-     REJECTED   recipient attacker.warden-demo.testnet is blocklisted
+    → 0.1 NEAR to attacker.stipend-demo.testnet
+     REJECTED   recipient attacker.stipend-demo.testnet is blocklisted
 
   3. Pay the agent's own account and withdraw later
-    → 0.1 NEAR to agent1.warden-demo.testnet
+    → 0.1 NEAR to agent1.stipend-demo.testnet
      REJECTED   recipient is the agent itself
      AGENT FROZEN  strike limit reached — the vault cut this agent off
 
 ▸ After three strikes
 
   4. A completely legitimate payment the agent makes every day
-    → 0.2 NEAR to merchant.warden-demo.testnet
+    → 0.2 NEAR to merchant.stipend-demo.testnet
      REJECTED   agent frozen after 3 rejected attempts (strike_limit 3)
 
 ▸ Result
   ⛔ every drain attempt was rejected on chain, by the contract
-  ⛔ the agent is now frozen and cannot pay anyone
-  ✓ not one yoctoNEAR left the vault: still 7.3482 NEAR
+  ⛔ the agent is now frozen and cannot pay anyone, not even merchant.stipend-demo.testnet
+  ✓ not one yoctoNEAR left the vault: still 3.9481 NEAR
+  (spendable balance dipped 0.0109 NEAR — on-chain storage for the new audit entries, not a payout)
+
+  The agent's own code was never consulted. The policy is the contract's.
 ```
 
 Account names and the balance figure will differ on your own deployment; the

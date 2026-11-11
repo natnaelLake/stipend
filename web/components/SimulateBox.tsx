@@ -90,7 +90,7 @@ export default function SimulateBox({
             className="focusable mono w-full rounded-md border px-2 py-1.5 text-sm"
             style={inputStyle}
             value={recipient}
-            placeholder="attacker.warden-demo.testnet"
+            placeholder="attacker.stipend-demo.testnet"
             onChange={(e) => setRecipient(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && void run()}
           />

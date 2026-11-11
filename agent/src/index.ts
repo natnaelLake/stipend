@@ -1,4 +1,4 @@
-import { loadEnv } from "./env.js";
+import { loadEnv, resolveRpc } from "./env.js";
 import { MissingApiKeyError } from "./llm.js";
 import * as ui from "./ui.js";
 
@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const env = loadEnv();
+  const env = await resolveRpc(loadEnv());
   await scenario.run(env);
   console.log();
 }

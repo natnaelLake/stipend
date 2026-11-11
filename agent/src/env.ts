@@ -11,6 +11,8 @@ config({ path: resolve(here, "../.env"), override: true, quiet: true });
 
 export interface Env {
   network: string;
+  /** Tried in order; the first one that answers is used for the whole run. */
+  rpcUrls: string[];
   rpcUrl: string;
   explorerTxBase: string;
   vaultId: string;
@@ -25,9 +27,16 @@ export interface Env {
   model: string;
 }
 
-const DEFAULT_RPC: Record<string, string> = {
-  testnet: "https://test.rpc.fastnear.com",
-  mainnet: "https://free.rpc.fastnear.com",
+// Public RPCs go down, rate-limit, and get deprecated without warning, so the
+// demo never depends on one. NEAR_RPC_URL overrides the list entirely.
+//
+// The agent SENDS transactions, so the order here differs from the dashboard's
+// (web/lib/config.ts), which only reads. drpc answers view calls happily but
+// has been observed returning "Internal server error" on broadcast, so it sits
+// second: a usable fallback for reads, not the first choice for writes.
+const DEFAULT_RPC: Record<string, string[]> = {
+  testnet: ["https://test.rpc.fastnear.com", "https://near-testnet.drpc.org"],
+  mainnet: ["https://free.rpc.fastnear.com", "https://near.drpc.org"],
 };
 
 const DEFAULT_EXPLORER: Record<string, string> = {
@@ -63,9 +72,16 @@ export function loadEnv(): Env {
     );
   }
 
+  const override = process.env.NEAR_RPC_URL;
+  const rpcUrls =
+    override === undefined || override === ""
+      ? (DEFAULT_RPC[network] ?? DEFAULT_RPC.testnet!)
+      : [override];
+
   return {
     network,
-    rpcUrl: opt("NEAR_RPC_URL", DEFAULT_RPC[network] ?? DEFAULT_RPC.testnet!),
+    rpcUrls,
+    rpcUrl: rpcUrls[0]!,
     explorerTxBase: opt(
       "NEAR_EXPLORER_TX_BASE",
       DEFAULT_EXPLORER[network] ?? DEFAULT_EXPLORER.testnet!,
@@ -81,4 +97,40 @@ export function loadEnv(): Env {
     anthropicKey: process.env.ANTHROPIC_API_KEY,
     model: opt("ANTHROPIC_MODEL", "claude-opus-5-5"),
   };
+}
+
+/**
+ * Pick the first RPC that actually answers, and pin the whole run to it.
+ *
+ * Probing once up front beats failing over mid-scenario: a scenario that
+ * switched endpoints halfway could read state from two different nodes and
+ * report a difference that is an artefact of the switch, not of the vault.
+ */
+export async function resolveRpc(env: Env): Promise<Env> {
+  if (env.rpcUrls.length === 1) return env;
+
+  const failures: string[] = [];
+  for (const url of env.rpcUrls) {
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 8000);
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "status", params: [] }),
+          signal: ctl.signal,
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = (await res.json()) as { result?: unknown };
+        if (!body.result) throw new Error("no result in status response");
+      } finally {
+        clearTimeout(timer);
+      }
+      return { ...env, rpcUrl: url };
+    } catch (err) {
+      failures.push(`  ${url} -> ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  throw new Error(`No NEAR RPC endpoint responded:\n${failures.join("\n")}`);
 }

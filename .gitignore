@@ -34,3 +34,6 @@ yarn-error.log*
 # local scratch
 /tmp/
 scratch/
+
+# Internal planning notes, deliberately not published.
+PLAN.md

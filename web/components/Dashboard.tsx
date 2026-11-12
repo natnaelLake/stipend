@@ -10,6 +10,7 @@ import { useWallet } from "@/lib/useWallet";
 
 import ActivityLog from "./ActivityLog";
 import AgentCards from "./AgentCards";
+import CounterpartyPanel from "./CounterpartyPanel";
 import ApprovalQueue from "./ApprovalQueue";
 import ListEditor from "./ListEditor";
 import PolicyPanel from "./PolicyPanel";
@@ -200,6 +201,16 @@ export default function Dashboard() {
         subtitle="Try the policy yourself — no wallet, no agent, nothing signed"
       >
         <SimulateBox agents={data.agents} suggestedRecipient={data.blocklist[0]} />
+      </Section>
+
+      <Section
+        title="Reported counterparties"
+        subtitle="Anyone can report an account; the contract decides what that means"
+      >
+        <CounterpartyPanel
+          flagged={data.flagged}
+          threshold={data.policy.report_block_threshold}
+        />
       </Section>
 
       <Section title="Activity log" subtitle="Append-only, written by the contract itself">

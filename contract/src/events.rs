@@ -78,3 +78,24 @@ pub fn emit_list_changed(list: &str, account: &AccountId, added: bool) {
 pub fn emit_withdraw(to: &AccountId, amount: NearToken) {
     emit("withdraw", json!({ "to": to, "amount": amount }));
 }
+
+pub fn emit_recipient_reported(
+    account: &AccountId,
+    reporter: &AccountId,
+    category: &str,
+    distinct_reporters: u32,
+) {
+    emit(
+        "recipient_reported",
+        json!({
+            "account": account,
+            "reporter": reporter,
+            "category": category,
+            "distinct_reporters": distinct_reporters,
+        }),
+    );
+}
+
+pub fn emit_reports_cleared(account: &AccountId) {
+    emit("reports_cleared", json!({ "account": account }));
+}

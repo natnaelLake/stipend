@@ -30,6 +30,8 @@ fn demo_policy() -> serde_json::Value {
         "strike_limit": 3,
         "strike_window_ms": 3_600_000u64,
         "pending_ttl_ms": 86_400_000u64,
+        "report_block_threshold": 2,
+        "trust_delay_ms": 3_600_000u64,
     })
 }
 
@@ -528,5 +530,119 @@ async fn simulate_payment_agrees_with_the_chain() -> anyhow::Result<()> {
         );
         assert_eq!(simulated["reason"], real["reason"], "{label}: reason differs");
     }
+    Ok(())
+}
+
+/// Counterparty reporting, end to end on a real sandbox chain.
+///
+/// The point is that the block comes from accounts the vault owner has no
+/// relationship with: the owner never touches the blocklist here.
+#[tokio::test]
+async fn independent_reports_block_a_recipient_the_owner_never_blocklisted() -> anyhow::Result<()> {
+    let w = setup().await?;
+    let supplier = w
+        .worker
+        .root_account()?
+        .create_subaccount("supplier")
+        .initial_balance(NearToken::from_near(5))
+        .transact()
+        .await?
+        .into_result()?;
+
+    // Before any reports: a small payment to this stranger is fine.
+    let before = pay(
+        &w.agent,
+        &w.vault,
+        supplier.id().as_str(),
+        NearToken::from_millinear(100),
+        "first invoice",
+    )
+    .await?;
+    assert_eq!(
+        before["decision"], "approved",
+        "an unreported stranger under the new-recipient limit should be payable: {}",
+        before["reason"]
+    );
+
+    let report = |who: &Account, n: u32| {
+        let who = who.clone();
+        let vault = w.vault.clone();
+        let target = supplier.id().clone();
+        async move {
+            who.call(vault.id(), "report_recipient")
+                .args_json(json!({
+                    "account_id": target,
+                    "category": "fake-invoice",
+                    "evidence": format!("https://example.invalid/{n}"),
+                }))
+                .deposit(NearToken::from_millinear(10))
+                .max_gas()
+                .transact()
+                .await?
+                .into_result()
+                .map_err(anyhow::Error::from)
+        }
+    };
+
+    // One report: a warning, not a block. The payment waits for a human.
+    report(&w.merchant, 1).await?;
+    let warned = pay(
+        &w.agent,
+        &w.vault,
+        supplier.id().as_str(),
+        NearToken::from_millinear(100),
+        "second invoice",
+    )
+    .await?;
+    assert_eq!(
+        warned["decision"], "pending",
+        "one report should warn, not block: {}",
+        warned["reason"]
+    );
+
+    // The same account reporting again must not move the threshold.
+    assert!(
+        report(&w.merchant, 2).await.is_err(),
+        "a second report from the same account must be refused"
+    );
+
+    // A second, independent reporter reaches the threshold.
+    report(&w.attacker, 3).await?;
+    let blocked = pay(
+        &w.agent,
+        &w.vault,
+        supplier.id().as_str(),
+        NearToken::from_millinear(100),
+        "third invoice",
+    )
+    .await?;
+    assert_eq!(
+        blocked["decision"], "rejected",
+        "two independent reporters should block: {}",
+        blocked["reason"]
+    );
+    assert!(
+        blocked["reason"]
+            .as_str()
+            .unwrap()
+            .contains("independent abuse reports"),
+        "got: {}",
+        blocked["reason"]
+    );
+
+    // The view a human reads must agree with what the chain just did.
+    let view: serde_json::Value = w
+        .vault
+        .view("get_recipient")
+        .args_json(json!({ "account_id": supplier.id() }))
+        .await?
+        .json()?;
+    assert_eq!(view["risk"], "blocked");
+    assert_eq!(view["distinct_reporters"], 2);
+    assert_eq!(
+        view["blocklisted"], false,
+        "the owner never blocklisted this account — the reports did the work"
+    );
+
     Ok(())
 }

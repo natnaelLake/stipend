@@ -51,6 +51,8 @@ fn default_policy() -> Policy {
         strike_limit: 3,
         strike_window_ms: 3_600_000,
         pending_ttl_ms: 86_400_000,
+        report_block_threshold: 2,
+        trust_delay_ms: 3_600_000,
     }
 }
 
@@ -733,4 +735,182 @@ fn dashboard_view_matches_the_individual_views() {
     assert_eq!(d.agents.len(), v.get_agents().len());
     assert_eq!(d.balance.available, v.get_balance().available);
     assert_eq!(d.as_of_ms, U64(T0 + 1));
+}
+
+// -------------------------------------------------------------------------
+// Counterparty risk: open reporting, the distinct-reporter threshold, and
+// trust that has to age before it counts.
+// -------------------------------------------------------------------------
+
+/// Drive the transfer callback so a payment counts as settled, which is what
+/// recipient history records (requests do not count, only money that landed).
+fn settle_last_transfer(v: &mut Vault, payee: &AccountId, amount: NearToken, ts_ms: u64) {
+    let log_id = U64(v.get_log_len().0 - 1);
+    as_callback(ts_ms + 1, PromiseResult::Successful(vec![]));
+    v.on_transfer_complete(log_id, agent(), payee.clone(), amount, true);
+}
+
+fn report(v: &mut Vault, reporter: AccountId, target: AccountId, ts_ms: u64) {
+    as_account(reporter, ts_ms, REPORT_BOND);
+    v.report_recipient(target, "drainer".to_string(), "https://example/evidence".to_string());
+}
+
+#[test]
+fn one_report_sends_the_payment_to_the_owner_rather_than_blocking_it() {
+    let mut v = setup();
+    report(&mut v, stranger(), accounts(0), T0);
+
+    // A fresh, unreported, unallowlisted recipient under the new-recipient
+    // limit would be approved outright; the single report is the difference.
+    as_agent(T0);
+    let d = v.request_payment(accounts(0), milli(100), "invoice".to_string());
+
+    assert_eq!(d.decision, Decision::Pending, "reason: {}", d.reason);
+    assert!(
+        d.reason.contains("1 abuse report"),
+        "the reason should name the report, got: {}",
+        d.reason
+    );
+}
+
+#[test]
+fn reaching_the_distinct_reporter_threshold_rejects_and_strikes() {
+    let mut v = setup();
+    let target = accounts(0);
+    report(&mut v, stranger(), target.clone(), T0);
+    report(&mut v, merchant(), target.clone(), T0);
+
+    as_agent(T0);
+    let d = v.request_payment(target, milli(100), "invoice".to_string());
+
+    assert_eq!(d.decision, Decision::Rejected, "reason: {}", d.reason);
+    assert!(d.reason.contains("2 independent abuse reports"), "got: {}", d.reason);
+    assert_eq!(v.get_agent(agent()).unwrap().strikes, 1, "this counts as a strike");
+}
+
+#[test]
+#[should_panic(expected = "has already reported")]
+fn the_same_account_cannot_report_twice_to_manufacture_a_block() {
+    let mut v = setup();
+    report(&mut v, stranger(), accounts(0), T0);
+    report(&mut v, stranger(), accounts(0), T0 + 1);
+}
+
+#[test]
+#[should_panic(expected = "requires a bond")]
+fn reporting_without_the_bond_is_refused() {
+    let mut v = setup();
+    as_account(stranger(), T0, ZERO);
+    v.report_recipient(accounts(0), "drainer".to_string(), String::new());
+}
+
+#[test]
+fn a_recent_first_payment_does_not_yet_count_as_trust() {
+    let mut v = setup();
+    let payee = accounts(0);
+
+    // Settle one payment to a brand-new recipient.
+    as_agent(T0);
+    v.request_payment(payee.clone(), milli(100), "first".to_string());
+    settle_last_transfer(&mut v, &payee, milli(100), T0);
+
+    // Still inside trust_delay_ms, so the new-recipient limit still applies
+    // and a larger payment must wait for the owner.
+    as_agent(T0 + 60_000);
+    let d = v.request_payment(payee, milli(900), "second".to_string());
+    assert_eq!(d.decision, Decision::Pending, "reason: {}", d.reason);
+    assert!(d.reason.contains("new recipient"), "got: {}", d.reason);
+}
+
+#[test]
+fn trust_counts_once_the_delay_has_elapsed() {
+    let mut v = setup();
+    let payee = accounts(0);
+
+    as_agent(T0);
+    v.request_payment(payee.clone(), milli(100), "first".to_string());
+    settle_last_transfer(&mut v, &payee, milli(100), T0);
+
+    // Past trust_delay_ms (1h in the fixture): now treated as known, so a
+    // payment above new_recipient_limit but under approval_threshold goes.
+    let later = T0 + 3_600_000 + 1;
+    as_agent(later);
+    let d = v.request_payment(payee, milli(900), "second".to_string());
+    assert_eq!(d.decision, Decision::Approved, "reason: {}", d.reason);
+}
+
+#[test]
+fn the_recipient_view_agrees_with_what_the_payment_path_does() {
+    let mut v = setup();
+    let target = accounts(0);
+    report(&mut v, stranger(), target.clone(), T0);
+    report(&mut v, merchant(), target.clone(), T0);
+
+    as_agent(T0);
+    let view = v.get_recipient(target.clone());
+    let decision = v.request_payment(target, milli(100), "invoice".to_string());
+
+    // The badge a human reads and the verdict the chain reached must come
+    // from the same rules, or the dashboard is lying.
+    assert_eq!(view.risk, crate::types::RiskLevel::Blocked);
+    assert_eq!(decision.decision, Decision::Rejected);
+    assert_eq!(view.distinct_reporters, 2);
+    assert!(!view.reasons.is_empty(), "a verdict must always carry its reasons");
+}
+
+#[test]
+fn blocklisted_outranks_reports_in_the_view() {
+    let v = setup();
+    let view = v.get_recipient(attacker());
+    assert_eq!(view.risk, crate::types::RiskLevel::Blocked);
+    assert!(view.blocklisted);
+    assert!(view.reasons[0].contains("blocklist"), "got: {:?}", view.reasons);
+}
+
+#[test]
+fn allowlisted_recipient_reads_as_known() {
+    let v = setup();
+    let view = v.get_recipient(merchant());
+    assert_eq!(view.risk, crate::types::RiskLevel::Known);
+    assert!(view.allowlisted);
+}
+
+#[test]
+fn owner_can_clear_reports_after_review() {
+    let mut v = setup();
+    let target = accounts(0);
+    report(&mut v, stranger(), target.clone(), T0);
+    report(&mut v, merchant(), target.clone(), T0);
+    assert_eq!(v.get_recipient(target.clone()).distinct_reporters, 2);
+
+    as_owner(T0);
+    v.clear_reports(target.clone());
+
+    assert_eq!(v.get_recipient(target.clone()).distinct_reporters, 0);
+    assert!(v.get_reports(target).is_empty());
+}
+
+#[test]
+#[should_panic(expected = "only the vault owner")]
+fn a_stranger_cannot_clear_reports() {
+    let mut v = setup();
+    report(&mut v, stranger(), accounts(0), T0);
+    as_account(stranger(), T0, ONE_YOCTO);
+    v.clear_reports(accounts(0));
+}
+
+#[test]
+fn flagged_lists_the_worst_first() {
+    let mut v = setup();
+    let one = accounts(0);
+    let two = agent();
+    report(&mut v, stranger(), one.clone(), T0);
+    report(&mut v, stranger(), two.clone(), T0);
+    report(&mut v, merchant(), two.clone(), T0);
+
+    let flagged = v.get_flagged();
+    assert_eq!(flagged.len(), 2);
+    assert_eq!(flagged[0].account_id, two, "two reporters should sort first");
+    assert_eq!(flagged[0].distinct_reporters, 2);
+    assert_eq!(flagged[1].distinct_reporters, 1);
 }

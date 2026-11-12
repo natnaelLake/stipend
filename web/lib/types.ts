@@ -16,6 +16,8 @@ export interface Policy {
   approval_threshold: string;
   new_recipient_limit: string;
   allowlist_only: boolean;
+  report_block_threshold: number;
+  trust_delay_ms: number;
   max_tx_per_hour: number;
   strike_limit: number;
   strike_window_ms: number;
@@ -84,4 +86,22 @@ export interface VaultSnapshot {
   balance: BalanceView;
   allowlist: string[];
   blocklist: string[];
+  flagged: RecipientView[];
+}
+
+export type RiskLevel = "blocked" | "warn" | "known";
+
+/** The counterparty verdict: allow, warn or block, with the reasons. */
+export interface RecipientView {
+  account_id: string;
+  risk: RiskLevel;
+  reasons: string[];
+  first_seen_ms: string;
+  times_paid: number;
+  total_paid: string;
+  last_paid_ms: string;
+  reports: number;
+  distinct_reporters: number;
+  allowlisted: boolean;
+  blocklisted: boolean;
 }

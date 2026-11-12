@@ -25,6 +25,9 @@ export interface Env {
   ownerKey: string | undefined;
   anthropicKey: string | undefined;
   model: string;
+  /** OpenRouter (or any OpenAI-compatible endpoint) key; preferred when set. */
+  openrouterKey: string | undefined;
+  openrouterModel: string;
 }
 
 // Public RPCs go down, rate-limit, and get deprecated without warning, so the
@@ -96,6 +99,8 @@ export function loadEnv(): Env {
     ownerKey: process.env.OWNER_PRIVATE_KEY,
     anthropicKey: process.env.ANTHROPIC_API_KEY,
     model: opt("ANTHROPIC_MODEL", "claude-opus-5-5"),
+    openrouterKey: process.env.OPENROUTER_API_KEY,
+    openrouterModel: opt("OPENROUTER_MODEL", "anthropic/claude-sonnet-5.5"),
   };
 }
 

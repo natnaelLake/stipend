@@ -24,10 +24,10 @@ pub mod events;
 pub mod policy;
 pub mod types;
 
-use policy::{evaluate, roll_windows, Context, Eval};
+use policy::{classify, evaluate, roll_windows, Context, Counterparty, Eval};
 use types::{
     AgentState, AgentView, BalanceView, DashboardView, Decision, LogEntry, PaymentDecision,
-    PendingPayment, Policy,
+    PendingPayment, Policy, RecipientRecord, RecipientView, Report,
 };
 
 /// Longest accepted memo, in bytes.
@@ -39,6 +39,16 @@ pub const SAFETY_BUFFER: NearToken = NearToken::from_millinear(100);
 /// Gas reserved for `on_transfer_complete`.
 pub const GAS_FOR_TRANSFER_CALLBACK: Gas = Gas::from_tgas(10);
 
+/// Bond required to file an abuse report. Filing must cost something, or the
+/// open report list becomes a free denial-of-service against any recipient.
+/// It also pays for the storage the report occupies, and is not refunded.
+pub const REPORT_BOND: NearToken = NearToken::from_millinear(10);
+
+pub const MAX_CATEGORY_LEN: usize = 32;
+pub const MAX_EVIDENCE_LEN: usize = 256;
+/// Bounded so one recipient cannot be used to grow state without limit.
+pub const MAX_REPORTS_PER_RECIPIENT: usize = 32;
+
 #[derive(BorshSerialize, BorshStorageKey)]
 #[borsh(crate = "near_sdk::borsh")]
 enum StorageKey {
@@ -47,6 +57,8 @@ enum StorageKey {
     Blocklist,
     Pending,
     Log,
+    Recipients,
+    Reports,
 }
 
 #[near(contract_state)]
@@ -65,6 +77,10 @@ pub struct Vault {
     log_start: u64,
     next_log_id: u64,
     next_pending_id: u64,
+    /// What this vault has seen of each account it was asked to pay.
+    recipients: IterableMap<AccountId, RecipientRecord>,
+    /// Open abuse reports, newest last, bounded per recipient.
+    reports: IterableMap<AccountId, Vec<Report>>,
 }
 
 #[near]
@@ -84,6 +100,8 @@ impl Vault {
             log_start: 0,
             next_log_id: 0,
             next_pending_id: 0,
+            recipients: IterableMap::new(StorageKey::Recipients),
+            reports: IterableMap::new(StorageKey::Reports),
         }
     }
 
@@ -119,19 +137,27 @@ impl Vault {
             .clone();
         roll_windows(&mut st, now, &self.policy);
 
+        // Seeing an account at all is the signal, whether or not we pay it:
+        // the trust delay has to start from first contact, not first payment,
+        // or it could be skipped by requesting early and paying later.
+        if !self.recipients.contains_key(&recipient) {
+            self.recipients
+                .insert(recipient.clone(), RecipientRecord::new(now));
+        }
+
         let eval = {
             let vault_id = env::current_account_id();
             let ctx = Context {
                 policy: &self.policy,
                 paused: self.paused,
-                blocklisted: self.blocklist.contains(&recipient),
-                allowlisted: self.allowlist.contains(&recipient),
+                counterparty: self.counterparty(&recipient),
                 vault_id: &vault_id,
                 owner_id: &self.owner,
                 agent_id: &agent_id,
                 recipient: &recipient,
                 amount,
                 available_balance: self.available_balance(),
+                now_ms: now,
             };
             evaluate(&ctx, &st)
         };
@@ -258,6 +284,16 @@ impl Vault {
         // and avoids the out-of-gas footgun in the deprecated `promise_result`.
         let ok = env::promise_result_checked(0, 0).is_ok();
         if ok {
+            // History counts money that actually landed, not requests made.
+            let now = env::block_timestamp_ms();
+            let rec = self
+                .recipients
+                .entry(recipient.clone())
+                .or_insert_with(|| RecipientRecord::new(now));
+            rec.times_paid = rec.times_paid.saturating_add(1);
+            rec.total_paid = rec.total_paid.saturating_add(amount);
+            rec.last_paid_ms = now;
+
             self.append_log(
                 &agent,
                 &recipient,
@@ -603,6 +639,7 @@ impl Vault {
             balance: self.get_balance(),
             allowlist: self.get_allowlist(),
             blocklist: self.get_blocklist(),
+            flagged: self.get_flagged(),
             as_of_ms: U64(env::block_timestamp_ms()),
         }
     }
@@ -650,14 +687,14 @@ impl Vault {
         let ctx = Context {
             policy: &self.policy,
             paused: self.paused,
-            blocklisted: self.blocklist.contains(&recipient),
-            allowlisted: self.allowlist.contains(&recipient),
+            counterparty: self.counterparty(&recipient),
             vault_id: &vault_id,
             owner_id: &self.owner,
             agent_id: &agent,
             recipient: &recipient,
             amount,
             available_balance: self.available_balance(),
+            now_ms: env::block_timestamp_ms(),
         };
 
         match evaluate(&ctx, &st) {
@@ -689,6 +726,127 @@ impl Vault {
     // ---------------------------------------------------------------------
     // Internals
     // ---------------------------------------------------------------------
+
+    // ---------------------------------------------------------------------
+    // Counterparty intelligence. Reporting is open to anyone on purpose: a
+    // blocklist only the owner can write is no help against a scammer the
+    // owner has never heard of. The bond and the distinct-reporter threshold
+    // are what stop that openness becoming a weapon.
+    // ---------------------------------------------------------------------
+
+    /// File an abuse report against a recipient. Callable by anyone.
+    ///
+    /// Requires `REPORT_BOND` attached, which is kept: it pays for the storage
+    /// and makes mass-reporting expensive. One account reporting repeatedly
+    /// still counts once towards the block threshold.
+    #[payable]
+    pub fn report_recipient(&mut self, account_id: AccountId, category: String, evidence: String) {
+        assert!(
+            env::attached_deposit() >= REPORT_BOND,
+            "a report requires a bond of {} attached",
+            REPORT_BOND
+        );
+        assert!(
+            !category.is_empty() && category.len() <= MAX_CATEGORY_LEN,
+            "category must be 1..={MAX_CATEGORY_LEN} bytes"
+        );
+        assert!(
+            evidence.len() <= MAX_EVIDENCE_LEN,
+            "evidence must be at most {MAX_EVIDENCE_LEN} bytes"
+        );
+
+        let reporter = env::predecessor_account_id();
+        let now = env::block_timestamp_ms();
+        let mut list = self.reports.get(&account_id).cloned().unwrap_or_default();
+        assert!(
+            list.len() < MAX_REPORTS_PER_RECIPIENT,
+            "this recipient already has the maximum of {MAX_REPORTS_PER_RECIPIENT} reports"
+        );
+        assert!(
+            !list.iter().any(|r| r.reporter == reporter),
+            "{} has already reported {}",
+            reporter,
+            account_id
+        );
+
+        list.push(Report {
+            reporter: reporter.clone(),
+            category: category.clone(),
+            evidence,
+            ts_ms: U64(now),
+        });
+        let distinct = list.len() as u32;
+        self.reports.insert(account_id.clone(), list);
+
+        events::emit_recipient_reported(&account_id, &reporter, &category, distinct);
+    }
+
+    /// Owner can clear reports against an account, e.g. after review.
+    #[payable]
+    pub fn clear_reports(&mut self, account_id: AccountId) {
+        assert_one_yocto();
+        self.assert_owner();
+        self.reports.remove(&account_id);
+        events::emit_reports_cleared(&account_id);
+    }
+
+    /// The counterparty verdict for one account: allow, warn or block.
+    ///
+    /// Produced by the same `classify` the payment path uses, so what a human
+    /// reads here is what the chain will do.
+    pub fn get_recipient(&self, account_id: AccountId) -> RecipientView {
+        self.recipient_view(&account_id, env::block_timestamp_ms())
+    }
+
+    /// Every report filed against an account, with its evidence.
+    pub fn get_reports(&self, account_id: AccountId) -> Vec<Report> {
+        self.reports.get(&account_id).cloned().unwrap_or_default()
+    }
+
+    /// Accounts with at least one report, worst first.
+    pub fn get_flagged(&self) -> Vec<RecipientView> {
+        let now = env::block_timestamp_ms();
+        let mut out: Vec<RecipientView> = self
+            .reports
+            .keys()
+            .map(|a| self.recipient_view(a, now))
+            .collect();
+        out.sort_by(|a, b| b.distinct_reporters.cmp(&a.distinct_reporters));
+        out
+    }
+
+    /// Gather what the policy engine needs to know about an account.
+    fn counterparty(&self, recipient: &AccountId) -> Counterparty {
+        let rec = self.recipients.get(recipient);
+        Counterparty {
+            blocklisted: self.blocklist.contains(recipient),
+            allowlisted: self.allowlist.contains(recipient),
+            // One report per account is enforced at filing time, so the list
+            // length is already the distinct-reporter count.
+            distinct_reporters: self.reports.get(recipient).map_or(0, |r| r.len() as u32),
+            times_paid: rec.map_or(0, |r| r.times_paid),
+            first_seen_ms: rec.map_or(0, |r| r.first_seen_ms),
+        }
+    }
+
+    fn recipient_view(&self, account_id: &AccountId, now_ms: u64) -> RecipientView {
+        let cp = self.counterparty(account_id);
+        let (risk, reasons) = classify(&cp, &self.policy, now_ms);
+        let rec = self.recipients.get(account_id);
+        RecipientView {
+            account_id: account_id.clone(),
+            risk,
+            reasons,
+            first_seen_ms: U64(rec.map_or(0, |r| r.first_seen_ms)),
+            times_paid: cp.times_paid,
+            total_paid: rec.map_or(NearToken::from_yoctonear(0), |r| r.total_paid),
+            last_paid_ms: U64(rec.map_or(0, |r| r.last_paid_ms)),
+            reports: self.reports.get(account_id).map_or(0, |r| r.len() as u32),
+            distinct_reporters: cp.distinct_reporters,
+            allowlisted: cp.allowlisted,
+            blocklisted: cp.blocklisted,
+        }
+    }
 
     fn assert_owner(&self) {
         assert_eq!(

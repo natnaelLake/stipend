@@ -26,6 +26,14 @@ pub struct Policy {
     pub strike_window_ms: u64,
     /// Pending requests older than this can be expired by anyone.
     pub pending_ttl_ms: u64,
+    /// Distinct reporters needed before a recipient is rejected outright.
+    /// One report only sends the payment to the owner; abuse of the open
+    /// report list must not become a kill switch anyone can pull.
+    pub report_block_threshold: u32,
+    /// How long after a recipient is first seen before payments already made
+    /// to it count as trust. Stops an attacker establishing a "known" payee
+    /// and draining through it inside one session.
+    pub trust_delay_ms: u64,
 }
 
 impl Policy {
@@ -54,6 +62,10 @@ impl Policy {
         assert!(
             self.pending_ttl_ms >= 60_000,
             "policy.pending_ttl_ms must be at least 60000 (1 minute)"
+        );
+        assert!(
+            self.report_block_threshold >= 1,
+            "policy.report_block_threshold must be at least 1"
         );
     }
 }
@@ -224,6 +236,96 @@ pub struct DashboardView {
     pub balance: BalanceView,
     pub allowlist: Vec<AccountId>,
     pub blocklist: Vec<AccountId>,
+    /// Recipients carrying at least one abuse report, worst first.
+    pub flagged: Vec<RecipientView>,
     /// Block timestamp of this snapshot.
     pub as_of_ms: U64,
+}
+
+/// One abuse report about a recipient.
+///
+/// Anyone may file one, which is the point: a blocklist only the owner can
+/// write is worth nothing to an agent meeting a scammer the owner has never
+/// heard of. Reports are bonded so filing costs something, and a single report
+/// never blocks on its own.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Report {
+    pub reporter: AccountId,
+    /// Free-form label, e.g. "drainer", "phishing", "fake-invoice".
+    pub category: String,
+    /// URL or content hash. Stored verbatim; the contract never fetches it.
+    pub evidence: String,
+    pub ts_ms: U64,
+}
+
+/// What this vault knows about a recipient from its own payment history.
+///
+/// Deliberately the vault's own history rather than global account age: a
+/// contract cannot read another account's creation height, and inventing an
+/// oracle for it would put the decision back off chain, which is the one thing
+/// this project exists to avoid.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecipientRecord {
+    /// First time this vault was ever asked to pay this account.
+    pub first_seen_ms: u64,
+    /// Payments that actually settled, not requests.
+    pub times_paid: u32,
+    pub total_paid: NearToken,
+    pub last_paid_ms: u64,
+}
+
+impl RecipientRecord {
+    pub fn new(now_ms: u64) -> Self {
+        Self {
+            first_seen_ms: now_ms,
+            times_paid: 0,
+            total_paid: NearToken::from_yoctonear(0),
+            last_paid_ms: 0,
+        }
+    }
+}
+
+/// The counterparty verdict: allow, warn, or block, with reasons.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskLevel {
+    /// Owner blocked it, or enough independent reporters did.
+    Blocked,
+    /// Reported, or never paid before: a human should look.
+    Warn,
+    /// Allowlisted, or paid before and past the trust delay.
+    Known,
+}
+
+impl RiskLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RiskLevel::Blocked => "blocked",
+            RiskLevel::Warn => "warn",
+            RiskLevel::Known => "known",
+        }
+    }
+}
+
+/// Everything known about one recipient, for the dashboard and for agents
+/// that want to check before asking.
+#[near(serializers = [json])]
+#[derive(Clone, Debug)]
+pub struct RecipientView {
+    pub account_id: AccountId,
+    pub risk: RiskLevel,
+    /// Why, in the order the rules considered it. Never empty.
+    pub reasons: Vec<String>,
+    pub first_seen_ms: U64,
+    pub times_paid: u32,
+    pub total_paid: NearToken,
+    pub last_paid_ms: U64,
+    pub reports: u32,
+    /// Reports from distinct accounts; this is what the threshold counts.
+    pub distinct_reporters: u32,
+    pub allowlisted: bool,
+    pub blocklisted: bool,
 }

@@ -13,6 +13,8 @@ import type { Env } from "./env.js";
 // materially more than the 30 TGas default.
 const CALL_GAS = teraToGas("100");
 const ONE_YOCTO = 1n;
+/** Must match REPORT_BOND in the contract (0.01 NEAR). */
+export const REPORT_BOND = 10_000_000_000_000_000_000_000n;
 
 export type Decision =
   | "approved"
@@ -77,6 +79,8 @@ export interface BalanceView {
 }
 
 export interface Policy {
+  report_block_threshold: number;
+  trust_delay_ms: number;
   max_per_tx: string;
   daily_limit: string;
   approval_threshold: string;
@@ -89,6 +93,29 @@ export interface Policy {
 }
 
 /** A decision plus the transaction it came from. */
+export type RiskLevel = "blocked" | "warn" | "known";
+
+export interface ReportView {
+  reporter: string;
+  category: string;
+  evidence: string;
+  ts_ms: string;
+}
+
+export interface RecipientView {
+  account_id: string;
+  risk: RiskLevel;
+  reasons: string[];
+  first_seen_ms: string;
+  times_paid: number;
+  total_paid: string;
+  last_paid_ms: string;
+  reports: number;
+  distinct_reporters: number;
+  allowlisted: boolean;
+  blocklisted: boolean;
+}
+
 export interface PaymentResult extends PaymentDecision {
   txHash: string | undefined;
   explorerUrl: string | undefined;
@@ -149,6 +176,15 @@ export class VaultReader {
   }
   getBalance() {
     return this.view<BalanceView>("get_balance");
+  }
+  getRecipient(accountId: string) {
+    return this.view<RecipientView>("get_recipient", { account_id: accountId });
+  }
+  getReports(accountId: string) {
+    return this.view<ReportView[]>("get_reports", { account_id: accountId });
+  }
+  getFlagged() {
+    return this.view<RecipientView[]>("get_flagged");
   }
   getAllowlist() {
     return this.view<string[]>("get_allowlist");
@@ -261,5 +297,38 @@ export class OwnerVaultClient extends VaultReader {
   }
   unpause() {
     return this.send("unpause", {});
+  }
+  clearReports(accountId: string) {
+    return this.send("clear_reports", { account_id: accountId });
+  }
+}
+
+/**
+ * Files abuse reports as an arbitrary account.
+ *
+ * Reporting is deliberately open to anyone, so this takes whichever account
+ * and key you hand it rather than assuming the owner. The bond is what keeps
+ * that openness from being free.
+ */
+export class ReporterClient extends VaultReader {
+  private readonly account: Account;
+
+  constructor(
+    env: Env,
+    readonly accountId: string,
+    key: string,
+  ) {
+    super(env);
+    this.account = new Account(accountId, this.provider, key as KeyPairString);
+  }
+
+  report(target: string, category: string, evidence: string) {
+    return this.account.callFunctionRaw({
+      contractId: this.contractId,
+      methodName: "report_recipient",
+      args: { account_id: target, category, evidence },
+      gas: CALL_GAS,
+      deposit: REPORT_BOND,
+    });
   }
 }

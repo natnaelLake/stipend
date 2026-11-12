@@ -7,7 +7,7 @@
 
 use near_sdk::{AccountId, NearToken};
 
-use crate::types::{AgentState, Policy};
+use crate::types::{AgentState, Policy, RiskLevel};
 
 pub const DAY_MS: u64 = 86_400_000;
 pub const HOUR_MS: u64 = 3_600_000;
@@ -23,18 +23,93 @@ pub enum Eval {
     Reject { reason: String, strike: bool },
 }
 
+/// What is known about the account being paid.
+///
+/// Split out from `Context` so the dashboard's counterparty verdict and the
+/// enforcement path can be fed the identical input and call the identical
+/// [`classify`]. A risk badge that disagreed with what the chain actually does
+/// would be worse than no badge at all.
+pub struct Counterparty {
+    pub blocklisted: bool,
+    pub allowlisted: bool,
+    /// Reports from distinct accounts, not total reports.
+    pub distinct_reporters: u32,
+    /// Payments that actually settled.
+    pub times_paid: u32,
+    /// When this vault first saw the account; 0 means never.
+    pub first_seen_ms: u64,
+}
+
 /// Everything about the vault the engine needs, gathered by the caller.
 pub struct Context<'a> {
     pub policy: &'a Policy,
     pub paused: bool,
-    pub blocklisted: bool,
-    pub allowlisted: bool,
+    pub counterparty: Counterparty,
     pub vault_id: &'a AccountId,
     pub owner_id: &'a AccountId,
     pub agent_id: &'a AccountId,
     pub recipient: &'a AccountId,
     pub amount: NearToken,
     pub available_balance: NearToken,
+    pub now_ms: u64,
+}
+
+/// Has this vault paid the account before, long enough ago to count?
+///
+/// The delay is the point. Without it an attacker who controls the agent can
+/// push one small payment through to a fresh account, have it counted as
+/// "known", and immediately send a large one. Trust has to age.
+pub fn is_trusted(cp: &Counterparty, policy: &Policy, now_ms: u64) -> bool {
+    if cp.allowlisted {
+        return true;
+    }
+    cp.times_paid > 0
+        && cp.first_seen_ms > 0
+        && now_ms.saturating_sub(cp.first_seen_ms) >= policy.trust_delay_ms
+}
+
+/// The counterparty verdict: allow, warn or block, with the reasons.
+///
+/// Used both by `get_recipient` and by [`evaluate`], so the badge a human sees
+/// is produced by the code that decides.
+pub fn classify(cp: &Counterparty, policy: &Policy, now_ms: u64) -> (RiskLevel, Vec<String>) {
+    let mut reasons = Vec::new();
+
+    if cp.blocklisted {
+        reasons.push("on the owner's blocklist".to_string());
+        return (RiskLevel::Blocked, reasons);
+    }
+    if cp.distinct_reporters >= policy.report_block_threshold {
+        reasons.push(format!(
+            "{} independent abuse reports (threshold {})",
+            cp.distinct_reporters, policy.report_block_threshold
+        ));
+        return (RiskLevel::Blocked, reasons);
+    }
+    if cp.distinct_reporters > 0 {
+        reasons.push(format!(
+            "{} abuse report(s), below the block threshold of {}",
+            cp.distinct_reporters, policy.report_block_threshold
+        ));
+        return (RiskLevel::Warn, reasons);
+    }
+    if cp.allowlisted {
+        reasons.push("on the owner's allowlist".to_string());
+        return (RiskLevel::Known, reasons);
+    }
+    if cp.times_paid == 0 {
+        reasons.push("never paid by this vault".to_string());
+        return (RiskLevel::Warn, reasons);
+    }
+    if !is_trusted(cp, policy, now_ms) {
+        reasons.push(format!(
+            "first seen too recently (trust delay {} ms not yet elapsed)",
+            policy.trust_delay_ms
+        ));
+        return (RiskLevel::Warn, reasons);
+    }
+    reasons.push(format!("paid {} time(s) by this vault", cp.times_paid));
+    (RiskLevel::Known, reasons)
 }
 
 /// Roll the per-agent windows forward to `now_ms`.
@@ -85,9 +160,22 @@ pub fn evaluate(ctx: &Context, st: &AgentState) -> Eval {
     }
 
     // 3. Explicit blocklist.
-    if ctx.blocklisted {
+    if ctx.counterparty.blocklisted {
         return reject(
             format!("recipient {} is blocklisted", ctx.recipient),
+            true,
+        );
+    }
+
+    // 3b. Enough independent reporters is a block in its own right. Distinct
+    //     reporters, not total reports, so one account cannot manufacture a
+    //     block by filing repeatedly.
+    if ctx.counterparty.distinct_reporters >= p.report_block_threshold {
+        return reject(
+            format!(
+                "recipient {} has {} independent abuse reports (threshold {})",
+                ctx.recipient, ctx.counterparty.distinct_reporters, p.report_block_threshold
+            ),
             true,
         );
     }
@@ -138,8 +226,9 @@ pub fn evaluate(ctx: &Context, st: &AgentState) -> Eval {
         );
     }
 
-    // 8. Unknown recipient.
-    if !ctx.allowlisted {
+    // 8. Unknown recipient. "Known" means allowlisted, or paid before and
+    //     past the trust delay — see `is_trusted`.
+    if !is_trusted(&ctx.counterparty, p, ctx.now_ms) {
         if p.allowlist_only {
             return reject(
                 format!(
@@ -157,6 +246,18 @@ pub fn evaluate(ctx: &Context, st: &AgentState) -> Eval {
                 ),
             };
         }
+    }
+
+    // 8b. Reported, but not by enough people to block. A single anonymous
+    //     report must not be able to stop payments outright, so it costs the
+    //     payment its automation and asks the owner instead.
+    if ctx.counterparty.distinct_reporters > 0 {
+        return Eval::Pending {
+            reason: format!(
+                "recipient {} has {} abuse report(s), needs owner approval",
+                ctx.recipient, ctx.counterparty.distinct_reporters
+            ),
+        };
     }
 
     // 9. Large payment to a known recipient.

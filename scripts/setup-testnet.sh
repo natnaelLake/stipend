@@ -119,7 +119,7 @@ create_sub() {
 # The testnet faucet sponsors the root account with ~10 NEAR, and everything
 # below comes out of that, so these are deliberately tight. Top the vault up
 # later with ./scripts/fund-vault.sh.
-create_sub "$VAULT_CONTRACT_ID"   "7 NEAR"   "$VAULT_PUBLIC_KEY"    "vault"
+create_sub "$VAULT_CONTRACT_ID"   "5 NEAR"   "$VAULT_PUBLIC_KEY"    "vault"
 create_sub "$AGENT_ACCOUNT_ID"    "0.6 NEAR" "$AGENT_PUBLIC_KEY"    "agent"
 create_sub "$MERCHANT_ACCOUNT_ID" "0.1 NEAR" "$MERCHANT_PUBLIC_KEY" "merchant"
 create_sub "$ATTACKER_ACCOUNT_ID" "0.1 NEAR" "$ATTACKER_PUBLIC_KEY" "attacker"
@@ -135,7 +135,9 @@ POLICY='{
   "max_tx_per_hour":     10,
   "strike_limit":        3,
   "strike_window_ms":    3600000,
-  "pending_ttl_ms":      86400000
+  "pending_ttl_ms":      86400000,
+  "report_block_threshold": 2,
+  "trust_delay_ms":      3600000
 }'
 INIT_ARGS="{\"owner\":\"$OWNER_ACCOUNT_ID\",\"policy\":$(echo "$POLICY" | tr -d '\n ')}"
 
@@ -153,15 +155,28 @@ fi
 # 6. The vault was funded at creation. Anything more has to come from another
 #    faucet-sponsored account, which is what fund-vault.sh does.
 
+# Does this account already carry this public key?
+key_exists() {
+  local account="$1" pubkey="$2"
+  near account list-keys "$account" network-config testnet now 2>/dev/null \
+    | grep -qF "$pubkey"
+}
+
 # 7. The whole point: give the agent a key that can ONLY call request_payment
-info "adding the agent's function-call access key (request_payment only)"
-run near account add-key "$AGENT_ACCOUNT_ID" \
-  grant-function-call-access \
-  --allowance '0.25 NEAR' \
-  --contract-account-id "$VAULT_CONTRACT_ID" \
-  --function-names 'request_payment' \
-  use-manually-provided-public-key "$AGENT_FC_PUBLIC_KEY" \
-  network-config testnet sign-with-plaintext-private-key "$AGENT_PRIVATE_KEY" send
+#    Adding a key that is already there is a hard error, so check first: this
+#    script has to survive being re-run after any step fails partway.
+if key_exists "$AGENT_ACCOUNT_ID" "$AGENT_FC_PUBLIC_KEY"; then
+  info "the agent's function-call key is already in place — skipping"
+else
+  info "adding the agent's function-call access key (request_payment only)"
+  run near account add-key "$AGENT_ACCOUNT_ID" \
+    grant-function-call-access \
+    --allowance '0.25 NEAR' \
+    --contract-account-id "$VAULT_CONTRACT_ID" \
+    --function-names 'request_payment' \
+    use-manually-provided-public-key "$AGENT_FC_PUBLIC_KEY" \
+    network-config testnet sign-with-plaintext-private-key "$AGENT_PRIVATE_KEY" send
+fi
 
 # 8. Seed the policy: register the agent, allowlist the merchant, blocklist the attacker
 owner_call() {

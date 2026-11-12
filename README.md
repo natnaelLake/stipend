@@ -111,7 +111,7 @@ Needs only Rust. **No network, no accounts, no keys.**
 cd contract && cargo test
 ```
 
-→ `test result: ok. 39 passed; 0 failed`
+→ `test result: ok. 51 passed; 0 failed`
 
 Integration tests run a real NEAR node in a sandbox (downloads a sandbox binary
 on first run, so this one does need network):
@@ -120,7 +120,7 @@ on first run, so this one does need network):
 cargo test -p stipend-integration
 ```
 
-→ `test result: ok. 6 passed; 0 failed`
+→ `test result: ok. 7 passed; 0 failed`
 
 **The first run takes about ten minutes and looks like it has hung — it has
 not.** Each test compiles the contract to wasm and boots a NEAR sandbox node,
@@ -130,6 +130,12 @@ this one needs network.
 
 `near-workspaces` lives in its own crate precisely so that `cd contract &&
 cargo test` stays offline and fast.
+
+The sandbox tests cover what a mocked runtime cannot: that a function-call key
+is refused by the protocol, that an approved payment actually moves balance,
+that a failed transfer refunds the reserved budget, and that two unrelated
+accounts reporting a recipient blocks it on a real chain without the owner
+touching the blocklist.
 
 ### The function-call key proof
 
@@ -218,8 +224,8 @@ vault. Expected output (abridged):
 ▸ Result
   ⛔ every drain attempt was rejected on chain, by the contract
   ⛔ the agent is now frozen and cannot pay anyone, not even merchant.stipend-demo.testnet
-  ✓ not one yoctoNEAR left the vault: still 3.9481 NEAR
-  (spendable balance dipped 0.0109 NEAR — on-chain storage for the new audit entries, not a payout)
+  ✓ not one yoctoNEAR left the vault: still 12.8777 NEAR
+  (spendable balance dipped 0.0149 NEAR — on-chain storage for the new audit entries, not a payout)
 
   The agent's own code was never consulted. The policy is the contract's.
 ```
@@ -235,14 +241,30 @@ All five scenarios:
 | `key-escape` | no | the stolen key cannot withdraw, re-policy or transfer |
 | `normal` | no | approved → executed, funds move, budget tracked |
 | `big-purchase` | no | over the threshold → pending → owner approves → executed |
+| `reported` | no | an account two strangers reported is blocked before the owner hears of it |
 | `injection` | **yes** | a poisoned invoice tells the agent to pay an attacker |
 
-`injection` needs `ANTHROPIC_API_KEY` in `.env`. The other four are
-deterministic and reproduce identically every run — which is why the demo video
-is built on `compromised`, not on `injection`.
+`injection` drives a real model and needs a key in `.env` — either
+`OPENROUTER_API_KEY` (any model; set `OPENROUTER_MODEL`) or `ANTHROPIC_API_KEY`.
+The tools are declared once in a model-neutral shape and each brain renders its
+own wire format, so the scenario runs the same either way. That is the point:
+if the vault only held against one vendor's model, "the vault stopped it" would
+be a claim about the model rather than about the contract.
+
+The other five are deterministic and reproduce identically every run.
 
 Between takes, `./scripts/reset-demo.sh` unpauses the vault, unfreezes the
-agent and clears the queue. It deliberately does **not** clear the audit log.
+agent and clears the queue. It deliberately does **not** clear the audit log or
+the abuse reports. The `reported` scenario clears its own target's reports at
+the start, so it can be re-run.
+
+Running `reported` before `compromised` leaves one strike on the agent, so
+`compromised` will freeze it a step earlier than the output below shows. Run
+`./scripts/reset-demo.sh` between them for the canonical sequence.
+
+If the vault runs low, `./scripts/fund-vault.sh` tops it up: the faucet funds
+one account at a time and the contract's own code already holds ~2.6 NEAR of
+storage reserve, so a single grant does not leave much spendable.
 
 ### Run the dashboard
 
@@ -280,6 +302,10 @@ list editing.
 | `pause()` / `unpause()` | owner + 1 yocto | global kill switch |
 | `withdraw(amount)` | owner + 1 yocto | moves funds back to the owner |
 | `expire_pending()` | **anyone** | drops queued payments past their TTL. Safe to expose: it can only remove |
+| `report_recipient(account_id, category, evidence)` | **anyone** + 0.01 NEAR bond | files an abuse report. One per account per recipient; the bond is kept and pays for the storage |
+| `clear_reports(account_id)` | owner + 1 yocto | drops every report against an account, after review |
+| `get_recipient(account_id)` | anyone (view) | the counterparty verdict — `known` / `warn` / `blocked` — with its reasons |
+| `get_reports(account_id)` / `get_flagged()` | anyone (view) | the reports themselves; every reported account, worst first |
 | `get_dashboard(log_limit)` | anyone (view) | the whole vault in one consistent snapshot |
 | `simulate_payment(agent, recipient, amount)` | anyone (view) | dry-run; shares the policy engine with `request_payment` |
 | `get_policy` `get_owner` `is_paused` `get_agents` `get_agent` `get_allowlist` `get_blocklist` `get_pending` `get_log` `get_recent_log` `get_log_len` `get_log_window` `get_balance` | anyone (view) | reads |
@@ -303,6 +329,8 @@ pub struct Policy {
     strike_limit:        u32,       // rejections before auto-freeze
     strike_window_ms:    u64,       // window the strikes accumulate in
     pending_ttl_ms:      u64,       // how long a queued payment survives
+    report_block_threshold: u32,    // distinct reporters needed to block
+    trust_delay_ms:      u64,       // how long before past payments count
 }
 ```
 
@@ -316,15 +344,22 @@ and asserted by the tests.
 | 1 | vault is paused | rejected | no |
 | 2 | agent is frozen | rejected | no |
 | 3 | recipient is blocklisted | rejected | **yes** |
+| 3b | `distinct_reporters >= report_block_threshold` | rejected | **yes** |
 | 4 | recipient is the vault or the agent itself | rejected | **yes** |
 | 5 | `amount > max_per_tx` | rejected | **yes** |
 | 6 | `spent_today + amount > daily_limit` | rejected | **yes** |
 | 7 | `tx_this_hour + 1 > max_tx_per_hour` | rejected | **yes** |
-| 8 | recipient not allowlisted, and `allowlist_only` | rejected | **yes** |
-| 9 | recipient not allowlisted, `amount > new_recipient_limit` | **pending** | no |
+| 8 | recipient not trusted, and `allowlist_only` | rejected | **yes** |
+| 9 | recipient not trusted, `amount > new_recipient_limit` | **pending** | no |
+| 9b | `distinct_reporters >= 1` (but under the threshold) | **pending** | no |
 | 10 | `amount > approval_threshold` | **pending** | no |
 | 11 | not enough available balance | rejected | no (not the agent's fault) |
 | — | otherwise | **approved**, budget reserved, transfer scheduled | — |
+
+"Trusted" means allowlisted by the owner, **or** paid before by this vault and
+first seen more than `trust_delay_ms` ago. The delay matters: without it, an
+attacker holding the agent key could push one small payment to a fresh account,
+have it counted as a known payee, and immediately send a large one.
 
 Reaching `strike_limit` strikes inside `strike_window_ms` freezes the agent.
 Only the owner can unfreeze it, which also resets the strikes.
@@ -337,7 +372,43 @@ an unregistered caller.
 
 The demo vault's policy: 2 NEAR per transaction, 5 NEAR per day, owner approval
 above 1 NEAR, unknown recipients above 0.5 NEAR, 10 payments per hour, freeze
-after 3 strikes in an hour.
+after 3 strikes in an hour, 2 independent reports to block a recipient, 1 hour
+before a paid recipient counts as trusted.
+
+### Counterparty risk
+
+An owner-curated blocklist is no help against an account the owner has never
+heard of, which is the normal case for an agent meeting new counterparties. So
+reporting is open to anyone:
+
+```
+report_recipient(account_id, category, evidence)   # 0.01 NEAR bond, anyone
+```
+
+Three things keep that from becoming a weapon:
+
+- **A bond.** Filing costs 0.01 NEAR, which also pays for the storage it uses.
+- **Distinct reporters.** One account reporting twice is refused; the threshold
+  counts people, not reports.
+- **One report warns, it does not block.** Below the threshold the payment goes
+  to the owner's approval queue instead of being rejected, so a single
+  anonymous report cannot stop a business paying its suppliers.
+
+The owner can clear reports after review with `clear_reports`.
+
+**What this deliberately does not do.** The track brief suggests scoring account
+age and whether a recipient's contract code recently changed. A NEAR contract
+cannot read either — there is no host function for another account's age or code
+history, so both would need an off-chain oracle, and the moment enforcement
+depends on an off-chain service the whole argument of this project collapses.
+Instead the vault uses what it can prove on chain: when it **first saw** an
+account, how many times it has actually **paid** it, and what other accounts
+have **reported** about it. `get_recipient` returns the verdict and its reasons:
+
+```bash
+near contract call-function as-read-only vault.stipend-demo.testnet get_recipient \
+  json-args '{"account_id":"supplier.stipend-demo.testnet"}' network-config testnet now
+```
 
 ---
 
@@ -392,8 +463,10 @@ contract/      Rust smart contract (near-sdk 5.30.1)
 integration/   sandbox tests (near-workspaces 0.24.0), kept separate so
                `cd contract && cargo test` needs no network
 agent/         TypeScript agent runner (near-api-js 7.4.0) + scenarios
+  src/llm.ts       model-neutral brains: Anthropic, or any OpenAI-compatible
+  src/tools.ts     the tools the model gets — note what is NOT there
 web/           Next.js dashboard (Next 16, React 19, Tailwind 4)
-scripts/       setup-testnet.sh, reset-demo.sh
+scripts/       setup-testnet.sh, reset-demo.sh, fund-vault.sh
 ```
 
 ## Built with

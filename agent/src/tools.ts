@@ -1,4 +1,3 @@
-import { betaZodTool } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { near, type AgentVaultClient, type PaymentResult } from "./near.js";
 import * as ui from "./ui.js";
@@ -10,6 +9,38 @@ export interface ToolContext {
 }
 
 /**
+ * A tool in a model-neutral shape.
+ *
+ * The scenarios must behave identically whichever model is driving, otherwise
+ * "the vault stopped it" would be a claim about one vendor rather than about
+ * the contract. So tools are declared once, here, and each brain in llm.ts
+ * renders them into its own wire format.
+ */
+export interface AgentTool {
+  name: string;
+  description: string;
+  /** Zod schema for the arguments; converted to JSON Schema per provider. */
+  schema: z.ZodObject<z.ZodRawShape>;
+  /** Receives validated input, returns the string handed back to the model. */
+  run: (input: Record<string, unknown>) => Promise<string>;
+}
+
+function defineTool<S extends z.ZodObject<z.ZodRawShape>>(t: {
+  name: string;
+  description: string;
+  schema: S;
+  run: (input: z.infer<S>) => Promise<string>;
+}): AgentTool {
+  return {
+    name: t.name,
+    description: t.description,
+    schema: t.schema,
+    // Validate at the boundary: a model may send anything, including nothing.
+    run: async (raw) => t.run(t.schema.parse(raw ?? {}) as z.infer<S>),
+  };
+}
+
+/**
  * The tools the LLM is given.
  *
  * Note what is deliberately absent: any client-side policy check that could
@@ -18,18 +49,18 @@ export interface ToolContext {
  * talked out of enforcing the rules, the rules would not be worth anything.
  * The vault decides, and the agent only reports what it was told.
  */
-export function buildAgentTools(ctx: ToolContext) {
+export function buildAgentTools(ctx: ToolContext): AgentTool[] {
   const { client } = ctx;
 
-  const check_payment = betaZodTool({
+  const check_payment = defineTool({
     name: "check_payment",
     description:
       "Dry-run a payment against the vault's policy without sending anything. " +
       "Returns the decision the vault would make and the reason. Use this before " +
       "paying anyone you have not paid before.",
-    inputSchema: z.object({
+    schema: z.object({
       recipient: z.string().describe("NEAR account id to pay, e.g. merchant.example.testnet"),
-      amount_near: z.string().describe("Amount in NEAR as a decimal string, e.g. \"0.3\""),
+      amount_near: z.string().describe('Amount in NEAR as a decimal string, e.g. "0.3"'),
     }),
     run: async (input) => {
       const amountYocto = near.toYocto(input.amount_near);
@@ -39,13 +70,13 @@ export function buildAgentTools(ctx: ToolContext) {
     },
   });
 
-  const pay = betaZodTool({
+  const pay = defineTool({
     name: "pay",
     description:
       "Ask the vault to pay a recipient. The vault enforces the owner's spending " +
       "policy and may approve, hold for owner approval, or reject the request. " +
       "You cannot override its decision.",
-    inputSchema: z.object({
+    schema: z.object({
       recipient: z.string().describe("NEAR account id to pay"),
       amount_near: z.string().describe("Amount in NEAR as a decimal string"),
       memo: z.string().max(256).describe("Short description of what this pays for"),
@@ -64,16 +95,14 @@ export function buildAgentTools(ctx: ToolContext) {
     },
   });
 
-  const get_budget = betaZodTool({
+  const get_budget = defineTool({
     name: "get_budget",
     description: "Check how much of today's spending budget is left for this agent.",
-    inputSchema: z.object({}),
+    schema: z.object({}),
     run: async () => {
       const a = await client.getAgent(client.accountId);
       if (!a) return JSON.stringify({ error: "this agent is not registered on the vault" });
-      ui.note(
-        `get_budget() → ${near.fmt(a.remaining_today)} left of ${near.fmt(a.daily_limit)}`,
-      );
+      ui.note(`get_budget() → ${near.fmt(a.remaining_today)} left of ${near.fmt(a.daily_limit)}`);
       return JSON.stringify({
         active: a.active,
         spent_today_near: near.toNear(a.spent_in_window),

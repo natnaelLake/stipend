@@ -4,6 +4,7 @@ import * as ui from "./ui.js";
 
 import * as compromised from "./scenarios/compromised.js";
 import * as normal from "./scenarios/normal.js";
+import * as reported from "./scenarios/reported.js";
 import * as bigPurchase from "./scenarios/big-purchase.js";
 import * as injection from "./scenarios/injection.js";
 import * as keyEscape from "./scenarios/key-escape.js";
@@ -18,6 +19,7 @@ const SCENARIOS: Record<string, Scenario> = {
   "big-purchase": bigPurchase,
   injection,
   compromised,
+  reported,
   "key-escape": keyEscape,
 };
 

@@ -49,6 +49,10 @@ pub const MAX_EVIDENCE_LEN: usize = 256;
 /// Bounded so one recipient cannot be used to grow state without limit.
 pub const MAX_REPORTS_PER_RECIPIENT: usize = 32;
 
+/// How much of a memo is used as the vendor key. Long enough to identify an
+/// invoice line, short enough that trailing detail does not defeat the match.
+pub const MEMO_KEY_LEN: usize = 48;
+
 #[derive(BorshSerialize, BorshStorageKey)]
 #[borsh(crate = "near_sdk::borsh")]
 enum StorageKey {
@@ -59,6 +63,61 @@ enum StorageKey {
     Log,
     Recipients,
     Reports,
+    MemoPayees,
+}
+
+/// The state layout before `memo_payees` was added.
+///
+/// Kept so a deployed vault can be upgraded in place instead of being
+/// redeployed under a new account: NEAR refuses to delete an account whose
+/// state is large, and an audit log is exactly that. Every collection keeps
+/// its original storage prefix, so the entries move across untouched.
+#[near(serializers = [borsh])]
+pub struct VaultV1 {
+    owner: AccountId,
+    paused: bool,
+    policy: Policy,
+    agents: IterableMap<AccountId, AgentState>,
+    allowlist: IterableSet<AccountId>,
+    blocklist: IterableSet<AccountId>,
+    pending: IterableMap<u64, PendingPayment>,
+    log: LookupMap<u64, LogEntry>,
+    log_start: u64,
+    next_log_id: u64,
+    next_pending_id: u64,
+    recipients: IterableMap<AccountId, RecipientRecord>,
+    reports: IterableMap<AccountId, Vec<Report>>,
+}
+
+#[near]
+impl Vault {
+    /// Upgrade a V1 vault in place, adding the memo index.
+    ///
+    /// `#[private]` means only the contract account itself can call it, which
+    /// is the account the deploy transaction is signed as.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate() -> Self {
+        let old: VaultV1 = env::state_read().unwrap_or_else(|| {
+            env::panic_str("no existing state to migrate")
+        });
+        Self {
+            owner: old.owner,
+            paused: old.paused,
+            policy: old.policy,
+            agents: old.agents,
+            allowlist: old.allowlist,
+            blocklist: old.blocklist,
+            pending: old.pending,
+            log: old.log,
+            log_start: old.log_start,
+            next_log_id: old.next_log_id,
+            next_pending_id: old.next_pending_id,
+            recipients: old.recipients,
+            reports: old.reports,
+            memo_payees: LookupMap::new(StorageKey::MemoPayees),
+        }
+    }
 }
 
 #[near(contract_state)]
@@ -81,6 +140,8 @@ pub struct Vault {
     recipients: IterableMap<AccountId, RecipientRecord>,
     /// Open abuse reports, newest last, bounded per recipient.
     reports: IterableMap<AccountId, Vec<Report>>,
+    /// Normalised memo -> the account it was first paid to.
+    memo_payees: LookupMap<String, AccountId>,
 }
 
 #[near]
@@ -102,6 +163,7 @@ impl Vault {
             next_pending_id: 0,
             recipients: IterableMap::new(StorageKey::Recipients),
             reports: IterableMap::new(StorageKey::Reports),
+            memo_payees: LookupMap::new(StorageKey::MemoPayees),
         }
     }
 
@@ -145,6 +207,8 @@ impl Vault {
                 .insert(recipient.clone(), RecipientRecord::new(now));
         }
 
+        let memo_payee = Self::memo_key(&memo).and_then(|k| self.memo_payees.get(&k).cloned());
+
         let eval = {
             let vault_id = env::current_account_id();
             let ctx = Context {
@@ -158,6 +222,7 @@ impl Vault {
                 amount,
                 available_balance: self.available_balance(),
                 now_ms: now,
+                memo_bound_to: memo_payee.as_ref(),
             };
             evaluate(&ctx, &st)
         };
@@ -169,6 +234,10 @@ impl Vault {
                 st.spent_in_window = st.spent_in_window.saturating_add(amount);
                 st.tx_in_hour = st.tx_in_hour.saturating_add(1);
                 self.agents.insert(agent_id.clone(), st);
+
+                // Bind the memo to this account now; the next request using the
+                // same description against a different account has to be seen.
+                self.bind_memo(&memo, &recipient, false);
 
                 let reason = "within policy".to_string();
                 let log_id = self.append_log(
@@ -459,6 +528,11 @@ impl Vault {
             st.tx_in_hour = st.tx_in_hour.saturating_add(1);
         }
 
+        // An owner release is a deliberate blessing of this account for this
+        // memo, including when rule 8c is what queued it. Bind it, so the
+        // vendor's new account becomes the remembered one.
+        self.bind_memo(&p.memo, &p.recipient, true);
+
         let reason = "released by owner".to_string();
         let log_id = self.append_log(
             &p.agent,
@@ -664,6 +738,7 @@ impl Vault {
         agent: AccountId,
         recipient: AccountId,
         amount: NearToken,
+        memo: Option<String>,
     ) -> PaymentDecision {
         let flat = |reason: String| PaymentDecision {
             decision: Decision::Rejected,
@@ -683,6 +758,11 @@ impl Vault {
         let mut st = stored.clone();
         roll_windows(&mut st, env::block_timestamp_ms(), &self.policy);
 
+        let memo_payee = memo
+            .as_deref()
+            .and_then(Self::memo_key)
+            .and_then(|k| self.memo_payees.get(&k).cloned());
+
         let vault_id = env::current_account_id();
         let ctx = Context {
             policy: &self.policy,
@@ -695,6 +775,7 @@ impl Vault {
             amount,
             available_balance: self.available_balance(),
             now_ms: env::block_timestamp_ms(),
+            memo_bound_to: memo_payee.as_ref(),
         };
 
         match evaluate(&ctx, &st) {
@@ -813,6 +894,39 @@ impl Vault {
             .collect();
         out.sort_by(|a, b| b.distinct_reporters.cmp(&a.distinct_reporters));
         out
+    }
+
+    /// The key a memo is indexed under: lowercased, whitespace collapsed,
+    /// truncated. Crude on purpose — this is a tripwire, not a parser, and a
+    /// vendor-switch attack keeps the description intact precisely so the
+    /// invoice still looks routine.
+    fn memo_key(memo: &str) -> Option<String> {
+        let norm: String = memo.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        if norm.is_empty() {
+            return None;
+        }
+        Some(norm.chars().take(MEMO_KEY_LEN).collect())
+    }
+
+    /// Which account this memo has settled to before, if any.
+    pub fn get_memo_payee(&self, memo: String) -> Option<AccountId> {
+        Self::memo_key(&memo).and_then(|k| self.memo_payees.get(&k).cloned())
+    }
+
+    /// Bind a memo to the account it was paid to.
+    ///
+    /// `force` is the difference between the vault noticing a payment and the
+    /// owner deciding one. An automatic approval only ever fills an empty
+    /// binding, so an agent cannot quietly move a vendor by paying twice. An
+    /// owner release overwrites it, because the owner has just looked at the
+    /// switch and accepted it — without that, every later payment to the
+    /// supplier's new account would queue again.
+    fn bind_memo(&mut self, memo: &str, recipient: &AccountId, force: bool) {
+        if let Some(k) = Self::memo_key(memo) {
+            if force || !self.memo_payees.contains_key(&k) {
+                self.memo_payees.insert(k, recipient.clone());
+            }
+        }
     }
 
     /// Gather what the policy engine needs to know about an account.

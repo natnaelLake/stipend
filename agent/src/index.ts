@@ -5,6 +5,7 @@ import * as ui from "./ui.js";
 import * as compromised from "./scenarios/compromised.js";
 import * as normal from "./scenarios/normal.js";
 import * as reported from "./scenarios/reported.js";
+import * as vendorSwitch from "./scenarios/vendor-switch.js";
 import * as bigPurchase from "./scenarios/big-purchase.js";
 import * as injection from "./scenarios/injection.js";
 import * as keyEscape from "./scenarios/key-escape.js";
@@ -20,6 +21,7 @@ const SCENARIOS: Record<string, Scenario> = {
   injection,
   compromised,
   reported,
+  "vendor-switch": vendorSwitch,
   "key-escape": keyEscape,
 };
 

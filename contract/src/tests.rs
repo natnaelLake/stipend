@@ -572,7 +572,7 @@ fn simulate_matches_request_and_leaves_no_trace() {
 
     as_agent(T0);
     let before_log = v.get_log_len();
-    let simulated = v.simulate_payment(agent(), attacker(), milli(100));
+    let simulated = v.simulate_payment(agent(), attacker(), milli(100), None);
 
     assert_eq!(simulated.decision, Decision::Rejected);
     assert_eq!(v.get_log_len(), before_log, "simulation must not log");
@@ -589,15 +589,15 @@ fn simulate_agrees_on_approve_and_pending() {
     as_agent(T0);
 
     assert_eq!(
-        v.simulate_payment(agent(), merchant(), milli(300)).decision,
+        v.simulate_payment(agent(), merchant(), milli(300), None).decision,
         Decision::Approved
     );
     assert_eq!(
-        v.simulate_payment(agent(), merchant(), milli(1500)).decision,
+        v.simulate_payment(agent(), merchant(), milli(1500), None).decision,
         Decision::Pending
     );
     assert_eq!(
-        v.simulate_payment(agent(), merchant(), near(3)).decision,
+        v.simulate_payment(agent(), merchant(), near(3), None).decision,
         Decision::Rejected
     );
 }
@@ -610,14 +610,14 @@ fn simulate_warns_when_the_next_strike_would_freeze() {
         v.request_payment(attacker(), milli(100), "drain".to_string());
     }
 
-    let s = v.simulate_payment(agent(), attacker(), milli(100));
+    let s = v.simulate_payment(agent(), attacker(), milli(100), None);
     assert!(s.agent_frozen, "third strike should be flagged as freezing");
 }
 
 #[test]
 fn simulate_rejects_an_unregistered_agent_without_panicking() {
     let v = setup();
-    let s = v.simulate_payment(stranger(), merchant(), milli(10));
+    let s = v.simulate_payment(stranger(), merchant(), milli(10), None);
     assert_eq!(s.decision, Decision::Rejected);
     assert!(s.reason.contains("not a registered agent"), "reason: {}", s.reason);
 }
@@ -913,4 +913,112 @@ fn flagged_lists_the_worst_first() {
     assert_eq!(flagged[0].account_id, two, "two reporters should sort first");
     assert_eq!(flagged[0].distinct_reporters, 2);
     assert_eq!(flagged[1].distinct_reporters, 1);
+}
+
+
+// -------------------------------------------------------------------------
+// Vendor switch: the same invoice description, a different account.
+//
+// stranger() and owner() are used as the two payee accounts because they are
+// neither allowlisted, blocklisted, the agent, nor the vault — so only the
+// rule under test can fire.
+// -------------------------------------------------------------------------
+
+#[test]
+fn the_same_memo_to_a_new_account_needs_owner_approval() {
+    let mut v = setup();
+    let vendor_old = stranger();
+    let vendor_new = owner();
+
+    as_agent(T0);
+    let first = v.request_payment(vendor_old.clone(), milli(100), "CloudCompute invoice".to_string());
+    assert_eq!(first.decision, Decision::Approved, "reason: {}", first.reason);
+    assert_eq!(v.get_memo_payee("CloudCompute invoice".to_string()), Some(vendor_old.clone()));
+
+    // Same description, same unremarkable amount, different destination.
+    as_agent(T0 + 1_000);
+    let second = v.request_payment(vendor_new, milli(100), "CloudCompute invoice".to_string());
+
+    assert_eq!(second.decision, Decision::Pending, "reason: {}", second.reason);
+    assert!(
+        second.reason.contains("previously paid to") && second.reason.contains(vendor_old.as_str()),
+        "the reason should name the account it used to go to, got: {}",
+        second.reason
+    );
+}
+
+#[test]
+fn the_memo_key_ignores_case_and_spacing() {
+    let mut v = setup();
+    as_agent(T0);
+    v.request_payment(stranger(), milli(100), "CloudCompute  Invoice".to_string());
+
+    as_agent(T0 + 1_000);
+    let d = v.request_payment(owner(), milli(100), "cloudcompute invoice".to_string());
+    assert_eq!(d.decision, Decision::Pending, "reason: {}", d.reason);
+}
+
+#[test]
+fn an_allowlisted_recipient_is_exempt_from_the_vendor_switch_rule() {
+    let mut v = setup();
+    as_agent(T0);
+    v.request_payment(stranger(), milli(100), "monthly hosting".to_string());
+
+    // merchant() is allowlisted in setup(): the owner vouched for that account
+    // by name, so paying it under an existing memo is not a switch to block.
+    as_agent(T0 + 1_000);
+    let d = v.request_payment(merchant(), milli(100), "monthly hosting".to_string());
+    assert_eq!(d.decision, Decision::Approved, "reason: {}", d.reason);
+}
+
+#[test]
+fn an_empty_memo_binds_nothing() {
+    let mut v = setup();
+    as_agent(T0);
+    v.request_payment(stranger(), milli(100), String::new());
+    assert_eq!(v.get_memo_payee(String::new()), None);
+
+    as_agent(T0 + 1_000);
+    let d = v.request_payment(owner(), milli(100), "   ".to_string());
+    assert_eq!(d.decision, Decision::Approved, "reason: {}", d.reason);
+}
+
+#[test]
+fn owner_release_rebinds_the_memo_to_the_new_account() {
+    let mut v = setup();
+    let old = stranger();
+    let new = owner();
+
+    as_agent(T0);
+    v.request_payment(old, milli(100), "api credits".to_string());
+
+    as_agent(T0 + 1_000);
+    let queued = v.request_payment(new.clone(), milli(100), "api credits".to_string());
+    assert_eq!(queued.decision, Decision::Pending, "reason: {}", queued.reason);
+
+    // The owner looks, decides the supplier really did move, and releases it.
+    as_owner(T0 + 2_000);
+    v.approve_pending(queued.pending_id.unwrap());
+
+    assert_eq!(
+        v.get_memo_payee("api credits".to_string()),
+        Some(new),
+        "after a deliberate release the new account becomes the remembered one"
+    );
+}
+
+#[test]
+fn the_dry_run_sees_the_vendor_switch_too() {
+    let mut v = setup();
+    as_agent(T0);
+    v.request_payment(stranger(), milli(100), "server rental".to_string());
+
+    // Without the memo the dry run cannot see rule 8c; with it, it must agree
+    // with what request_payment would do.
+    let blind = v.simulate_payment(agent(), owner(), milli(100), None);
+    assert_eq!(blind.decision, Decision::Approved, "reason: {}", blind.reason);
+
+    let informed =
+        v.simulate_payment(agent(), owner(), milli(100), Some("server rental".to_string()));
+    assert_eq!(informed.decision, Decision::Pending, "reason: {}", informed.reason);
 }

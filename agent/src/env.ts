@@ -21,6 +21,8 @@ export interface Env {
   merchantId: string;
   attackerId: string;
   strangerId: string;
+  vendorId: string;
+  vendor2Id: string;
   ownerId: string;
   ownerKey: string | undefined;
   anthropicKey: string | undefined;
@@ -95,6 +97,8 @@ export function loadEnv(): Env {
     merchantId: process.env.MERCHANT_ACCOUNT_ID!,
     attackerId: process.env.ATTACKER_ACCOUNT_ID!,
     strangerId: opt("STRANGER_ACCOUNT_ID", process.env.MERCHANT_ACCOUNT_ID!),
+    vendorId: opt("VENDOR_ACCOUNT_ID", ""),
+    vendor2Id: opt("VENDOR2_ACCOUNT_ID", ""),
     ownerId: process.env.OWNER_ACCOUNT_ID!,
     ownerKey: process.env.OWNER_PRIVATE_KEY,
     anthropicKey: process.env.ANTHROPIC_API_KEY,

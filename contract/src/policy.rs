@@ -52,6 +52,12 @@ pub struct Context<'a> {
     pub amount: NearToken,
     pub available_balance: NearToken,
     pub now_ms: u64,
+    /// The account this memo has been paid to before, if any.
+    ///
+    /// Invoice fraud rarely looks like a new payee. It looks like the supplier
+    /// you already pay, with the account number changed. The vault remembers
+    /// which account a given memo settled to, so the change is visible.
+    pub memo_bound_to: Option<&'a AccountId>,
 }
 
 /// Has this vault paid the account before, long enough ago to count?
@@ -139,7 +145,8 @@ fn reject(reason: String, strike: bool) -> Eval {
 ///
 /// Rules are checked in a fixed order and the first one that fires wins, so the
 /// `reason` string always names a single rule. This order is part of the public
-/// contract: it is documented in the README and asserted in the tests.
+/// contract: it is documented in the README and asserted in the tests. The
+/// numbers here match the table in the README; rule 8 covers two of its rows.
 pub fn evaluate(ctx: &Context, st: &AgentState) -> Eval {
     let p = ctx.policy;
 
@@ -248,7 +255,7 @@ pub fn evaluate(ctx: &Context, st: &AgentState) -> Eval {
         }
     }
 
-    // 8b. Reported, but not by enough people to block. A single anonymous
+    // 9b. Reported, but not by enough people to block. A single anonymous
     //     report must not be able to stop payments outright, so it costs the
     //     payment its automation and asks the owner instead.
     if ctx.counterparty.distinct_reporters > 0 {
@@ -260,7 +267,22 @@ pub fn evaluate(ctx: &Context, st: &AgentState) -> Eval {
         };
     }
 
-    // 9. Large payment to a known recipient.
+    // 9c. Same memo, different account. This is the business-email-compromise
+    //     shape: the invoice looks routine and the amount is unremarkable, and
+    //     only the destination has moved. An allowlisted recipient is exempt,
+    //     because the owner has already vouched for that account by name.
+    if let Some(previous) = ctx.memo_bound_to {
+        if previous != ctx.recipient && !ctx.counterparty.allowlisted {
+            return Eval::Pending {
+                reason: format!(
+                    "this memo was previously paid to {}, now {} — needs owner approval",
+                    previous, ctx.recipient
+                ),
+            };
+        }
+    }
+
+    // 10. Large payment to a known recipient.
     if ctx.amount > p.approval_threshold {
         return Eval::Pending {
             reason: format!(
@@ -270,7 +292,7 @@ pub fn evaluate(ctx: &Context, st: &AgentState) -> Eval {
         };
     }
 
-    // 10. Funds. Not the agent's fault, so no strike.
+    // 11. Funds. Not the agent's fault, so no strike.
     if ctx.amount > ctx.available_balance {
         return reject(
             format!(

@@ -186,6 +186,9 @@ export class VaultReader {
   getFlagged() {
     return this.view<RecipientView[]>("get_flagged");
   }
+  getMemoPayee(memo: string) {
+    return this.view<string | null>("get_memo_payee", { memo });
+  }
   getAllowlist() {
     return this.view<string[]>("get_allowlist");
   }
@@ -194,8 +197,9 @@ export class VaultReader {
   }
 
   /** Dry-run. Shares the on-chain policy engine, so it cannot disagree. */
-  simulatePayment(agent: string, recipient: string, amountYocto: string) {
+  simulatePayment(agent: string, recipient: string, amountYocto: string, memo?: string) {
     return this.view<PaymentDecision>("simulate_payment", {
+      memo: memo ?? null,
       agent,
       recipient,
       amount: amountYocto,

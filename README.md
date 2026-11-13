@@ -111,7 +111,7 @@ Needs only Rust. **No network, no accounts, no keys.**
 cd contract && cargo test
 ```
 
-→ `test result: ok. 51 passed; 0 failed`
+→ `test result: ok. 57 passed; 0 failed`
 
 Integration tests run a real NEAR node in a sandbox (downloads a sandbox binary
 on first run, so this one does need network):
@@ -242,6 +242,7 @@ All five scenarios:
 | `normal` | no | approved → executed, funds move, budget tracked |
 | `big-purchase` | no | over the threshold → pending → owner approves → executed |
 | `reported` | no | an account two strangers reported is blocked before the owner hears of it |
+| `vendor-switch` | no | a familiar invoice with the account number changed is held for a human |
 | `injection` | **yes** | a poisoned invoice tells the agent to pay an attacker |
 
 `injection` drives a real model and needs a key in `.env` — either
@@ -340,6 +341,8 @@ list editing.
 | `clear_reports(account_id)` | owner + 1 yocto | drops every report against an account, after review |
 | `get_recipient(account_id)` | anyone (view) | the counterparty verdict — `known` / `warn` / `blocked` — with its reasons |
 | `get_reports(account_id)` / `get_flagged()` | anyone (view) | the reports themselves; every reported account, worst first |
+| `get_memo_payee(memo)` | anyone (view) | which account this invoice description has settled to before |
+| `migrate()` | the contract itself (`#[private]`) | upgrades V1 state in place. NEAR refuses to delete an account whose state is large, so an audit log cannot be thrown away and redeployed |
 | `get_dashboard(log_limit)` | anyone (view) | the whole vault in one consistent snapshot |
 | `simulate_payment(agent, recipient, amount)` | anyone (view) | dry-run; shares the policy engine with `request_payment` |
 | `get_policy` `get_owner` `is_paused` `get_agents` `get_agent` `get_allowlist` `get_blocklist` `get_pending` `get_log` `get_recent_log` `get_log_len` `get_log_window` `get_balance` | anyone (view) | reads |
@@ -386,6 +389,7 @@ and asserted by the tests.
 | 8 | recipient not trusted, and `allowlist_only` | rejected | **yes** |
 | 9 | recipient not trusted, `amount > new_recipient_limit` | **pending** | no |
 | 9b | `distinct_reporters >= 1` (but under the threshold) | **pending** | no |
+| 9c | this memo was previously paid to a different account | **pending** | no |
 | 10 | `amount > approval_threshold` | **pending** | no |
 | 11 | not enough available balance | rejected | no (not the agent's fault) |
 | — | otherwise | **approved**, budget reserved, transfer scheduled | — |
@@ -429,6 +433,33 @@ Three things keep that from becoming a weapon:
   anonymous report cannot stop a business paying its suppliers.
 
 The owner can clear reports after review with `clear_reports`.
+
+### Invoice fraud: the same memo, a different account
+
+Attacks on accounts payable rarely introduce a new supplier. They take one you
+already pay and change the account number. The amount is unremarkable, the
+description is the one you have approved a hundred times, and every limit in
+the policy is satisfied — only the destination moved.
+
+The vault records which account a memo settled to, so that is the one thing it
+can still see:
+
+```
+month 1   "CloudCompute API credits, monthly" → vendor.…      approved, remembered
+month 2   "CloudCompute API credits, monthly" → vendor2.…     PENDING, needs the owner
+```
+
+The memo key is lowercased and whitespace-collapsed, so casing and spacing do
+not defeat it. An **allowlisted** recipient is exempt, because the owner has
+already vouched for that account by name. When the owner releases a held
+payment, the new account becomes the remembered one — otherwise a supplier who
+genuinely moved banks would queue forever. An automatic approval never
+overwrites an existing binding, so an agent cannot quietly move a vendor by
+paying twice.
+
+This is a tripwire, not a parser. It catches the common shape; an attacker who
+also rewrites the description defeats it, and the per-transaction cap, the
+daily budget and the approval threshold are what remain.
 
 **What this deliberately does not do.** The track brief suggests scoring account
 age and whether a recipient's contract code recently changed. A NEAR contract

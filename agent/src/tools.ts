@@ -61,10 +61,19 @@ export function buildAgentTools(ctx: ToolContext): AgentTool[] {
     schema: z.object({
       recipient: z.string().describe("NEAR account id to pay, e.g. merchant.example.testnet"),
       amount_near: z.string().describe('Amount in NEAR as a decimal string, e.g. "0.3"'),
+      memo: z
+        .string()
+        .optional()
+        .describe("The memo you intend to use. Pass it: the vault checks whether this description has been paid to a different account before."),
     }),
     run: async (input) => {
       const amountYocto = near.toYocto(input.amount_near);
-      const d = await client.simulatePayment(client.accountId, input.recipient, amountYocto);
+      const d = await client.simulatePayment(
+        client.accountId,
+        input.recipient,
+        amountYocto,
+        input.memo,
+      );
       ui.note(`check_payment(${input.recipient}, ${input.amount_near} NEAR) → ${d.decision}`);
       return JSON.stringify({ decision: d.decision, reason: d.reason });
     },
